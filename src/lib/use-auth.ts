@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-import { phoneToAuthEmail } from "./phone";
 
 export type AuthState = {
   session: Session | null;
@@ -34,10 +33,9 @@ export function useAuth(): AuthState {
   return { session, loading };
 }
 
-/** Sign in with the phone number as the only identifier. */
-export async function signInWithPhone(phone: string, password: string) {
-  const email = phoneToAuthEmail(phone);
-  return supabase.auth.signInWithPassword({ email, password });
+/** Sign in with the e-mail address as the login identifier. */
+export async function signInWithEmail(email: string, password: string) {
+  return supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
 }
 
 export async function signOut() {
