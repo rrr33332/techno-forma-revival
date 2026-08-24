@@ -14,7 +14,7 @@ type Duplex = {
 
 async function openWorkerSocket(host: string, port: number): Promise<Duplex | null> {
   try {
-    const mod = (await import(/* @vite-ignore */ "cloudflare:sockets")) as {
+    const mod = (await import(/* @vite-ignore */ "cloudflare:sockets" as string)) as {
       connect: (a: string, o?: unknown) => {
         readable: ReadableStream<Uint8Array>;
         writable: WritableStream<Uint8Array>;
