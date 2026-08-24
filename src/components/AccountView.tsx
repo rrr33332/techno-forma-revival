@@ -144,7 +144,7 @@ export function AccountView({ lang }: { lang: Lang }) {
               onChange={(e) => setProfile((p) => ({ ...p, lastName: e.target.value }))}
             />
             <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-sm text-muted-foreground">
-              {T("phone")}: {data?.profile ? formatPhone(data.profile.phone) : "—"}
+              {T("phone")}: {data?.profile?.phone ? formatPhone(data.profile.phone) : "—"}
             </div>
             {profileState === "done" && <p className="text-sm text-emerald-700">{T("saved")}</p>}
             <button

@@ -52,7 +52,7 @@ export const placeOrder = createServerFn({ method: "POST" })
       .insert({
         user_id: context.userId,
         customer_name: `${profile.first_name} ${profile.last_name}`.trim(),
-        phone: profile.phone,
+        phone: profile.phone ?? "",
         email: data.email || null,
         city: np?.city || data.city || null,
         delivery: data.delivery,
@@ -90,7 +90,7 @@ export const placeOrder = createServerFn({ method: "POST" })
         userId: context.userId,
         firstName: profile.first_name,
         lastName: profile.last_name,
-        phone: profile.phone,
+        phone: profile.phone ?? "",
         comment: data.comment || null,
         total,
         city: np?.city || data.city || null,
