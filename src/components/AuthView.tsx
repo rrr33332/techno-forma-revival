@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { Loader2 } from "lucide-react";
 import {
@@ -9,7 +9,7 @@ import {
   resendRegistrationCode,
   resetPasswordWithCode,
 } from "@/lib/auth.functions";
-import { signInWithPhone } from "@/lib/use-auth";
+import { signInWithEmail } from "@/lib/use-auth";
 import { checkPassword, isValidPhone } from "@/lib/phone";
 import { href, type Lang } from "@/lib/site";
 
@@ -19,43 +19,53 @@ const TXT = {
   login: { ru: "Вход", uk: "Вхід" },
   register: { ru: "Создать аккаунт", uk: "Створити акаунт" },
   forgot: { ru: "Забыли пароль?", uk: "Забули пароль?" },
-  firstName: { ru: "Имя", uk: "Ім'я" },
-  lastName: { ru: "Фамилия", uk: "Прізвище" },
+  nickname: { ru: "Ник (имя в аккаунте)", uk: "Нік (ім'я в акаунті)" },
+  email: { ru: "E-mail", uk: "E-mail" },
   phone: { ru: "Телефон", uk: "Телефон" },
   password: { ru: "Пароль", uk: "Пароль" },
   newPassword: { ru: "Новый пароль", uk: "Новий пароль" },
-  code: { ru: "Код из SMS", uk: "Код із SMS" },
+  code: { ru: "Код из письма", uk: "Код із листа" },
   submitLogin: { ru: "Войти", uk: "Увійти" },
   submitRegister: { ru: "Зарегистрироваться", uk: "Зареєструватися" },
-  submitCode: { ru: "Подтвердить номер", uk: "Підтвердити номер" },
+  submitCode: { ru: "Подтвердить e-mail", uk: "Підтвердити e-mail" },
   resend: { ru: "Отправить код ещё раз", uk: "Надіслати код ще раз" },
   sendCode: { ru: "Получить код", uk: "Отримати код" },
   save: { ru: "Сохранить пароль", uk: "Зберегти пароль" },
-  toRegister: { ru: "Нет аккаунта? Создать", uk: "Немає акаунта? Створити" },
-  toLogin: { ru: "Уже есть аккаунт? Войти", uk: "Вже маєте акаунт? Увійти" },
+  forgotLink: { ru: "Забыли пароль?", uk: "Забули пароль?" },
+  backToLogin: { ru: "Вернуться ко входу", uk: "Повернутися до входу" },
   codeSent: {
-    ru: "Мы отправили код подтверждения на ваш номер.",
-    uk: "Ми надіслали код підтвердження на ваш номер.",
+    ru: "Мы отправили код подтверждения на вашу почту. Проверьте папку «Спам».",
+    uk: "Ми надіслали код підтвердження на вашу пошту. Перевірте теку «Спам».",
   },
   devCode: { ru: "Тестовый код", uk: "Тестовий код" },
+  badEmail: { ru: "Введите корректный e-mail", uk: "Введіть коректний e-mail" },
   badPhone: { ru: "Введите корректный номер телефона", uk: "Введіть коректний номер телефону" },
+  badNickname: { ru: "Ник: от 2 до 40 символов", uk: "Нік: від 2 до 40 символів" },
   badPassword: {
     ru: "Пароль: минимум 8 символов, буквы и цифры",
     uk: "Пароль: щонайменше 8 символів, літери та цифри",
   },
-  badCreds: { ru: "Неверный телефон или пароль", uk: "Невірний телефон або пароль" },
+  badCreds: { ru: "Неверный e-mail или пароль", uk: "Невірний e-mail або пароль" },
+  emailTaken: { ru: "Такой e-mail уже зарегистрирован", uk: "Такий e-mail вже зареєстрований" },
+  nicknameTaken: { ru: "Такой ник уже занят", uk: "Такий нік вже зайнятий" },
   phoneTaken: { ru: "Такой номер уже зарегистрирован", uk: "Такий номер вже зареєстрований" },
   badCode: { ru: "Неверный или устаревший код", uk: "Невірний або застарілий код" },
-  generic: { ru: "Что-то пошло не так. Попробуйте ещё раз.", uk: "Щось пішло не так. Спробуйте ще раз." },
+  generic: {
+    ru: "Что-то пошло не так. Попробуйте ещё раз.",
+    uk: "Щось пішло не так. Спробуйте ще раз.",
+  },
   resetOk: { ru: "Пароль обновлён. Войдите заново.", uk: "Пароль оновлено. Увійдіть знову." },
   hint: {
-    ru: "Телефон — основной идентификатор, e-mail не нужен.",
-    uk: "Телефон — основний ідентифікатор, e-mail не потрібен.",
+    ru: "Вход по e-mail. Телефон нужен для оформления заказов.",
+    uk: "Вхід за e-mail. Телефон потрібен для оформлення замовлень.",
   },
+  wait: { ru: "Повторно через", uk: "Повторно через" },
 } as const;
 
 const input =
   "w-full rounded-lg border border-input bg-background px-3 py-3 text-base outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-ring/25 sm:text-sm";
+
+const emailOk = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim());
 
 export function AuthView({ lang }: { lang: Lang }) {
   const T = (k: keyof typeof TXT) => TXT[k][lang];
@@ -73,10 +83,17 @@ export function AuthView({ lang }: { lang: Lang }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [devCode, setDevCode] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "code">("form");
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const id = setTimeout(() => setCooldown((n) => n - 1), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
 
   const [f, setF] = useState({
-    firstName: "",
-    lastName: "",
+    nickname: "",
+    email: "",
     phone: "",
     password: "",
     code: "",
@@ -93,13 +110,20 @@ export function AuthView({ lang }: { lang: Lang }) {
 
   const goAccount = () => navigate({ to: href("/account", lang) });
 
+  const afterSend = (code: string | null) => {
+    setStep("code");
+    setNotice(T("codeSent"));
+    setDevCode(code);
+    setCooldown(60);
+  };
+
   const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!isValidPhone(f.phone)) return setError(T("badPhone"));
+    if (!emailOk(f.email)) return setError(T("badEmail"));
     setBusy(true);
     try {
-      const { error: err } = await signInWithPhone(f.phone, f.password);
+      const { error: err } = await signInWithEmail(f.email, f.password);
       if (err) setError(T("badCreds"));
       else goAccount();
     } catch {
@@ -112,24 +136,33 @@ export function AuthView({ lang }: { lang: Lang }) {
   const submitRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (f.nickname.trim().length < 2) return setError(T("badNickname"));
+    if (!emailOk(f.email)) return setError(T("badEmail"));
     if (!isValidPhone(f.phone)) return setError(T("badPhone"));
     if (!checkPassword(f.password).ok) return setError(T("badPassword"));
     setBusy(true);
     try {
       const res = await doRegister({
         data: {
-          firstName: f.firstName,
-          lastName: f.lastName,
+          nickname: f.nickname,
+          email: f.email,
           phone: f.phone,
           password: f.password,
         },
       });
-      if (!res.ok) setError(T(res.error === "phone_taken" ? "phoneTaken" : "generic"));
-      else {
-        setStep("code");
-        setNotice(T("codeSent"));
-        setDevCode(res.devCode ?? null);
-      }
+      if (!res.ok) {
+        setError(
+          T(
+            res.error === "email_taken"
+              ? "emailTaken"
+              : res.error === "nickname_taken"
+                ? "nicknameTaken"
+                : res.error === "phone_taken"
+                  ? "phoneTaken"
+                  : "generic",
+          ),
+        );
+      } else afterSend(res.devCode ?? null);
     } catch {
       setError(T("generic"));
     } finally {
@@ -142,10 +175,10 @@ export function AuthView({ lang }: { lang: Lang }) {
     setError(null);
     setBusy(true);
     try {
-      const res = await doConfirm({ data: { phone: f.phone, code: f.code } });
+      const res = await doConfirm({ data: { email: f.email, code: f.code } });
       if (!res.ok) setError(T("badCode"));
       else {
-        const { error: err } = await signInWithPhone(f.phone, f.password);
+        const { error: err } = await signInWithEmail(f.email, f.password);
         if (err) switchMode("login");
         else goAccount();
       }
@@ -159,13 +192,11 @@ export function AuthView({ lang }: { lang: Lang }) {
   const submitForgot = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!isValidPhone(f.phone)) return setError(T("badPhone"));
+    if (!emailOk(f.email)) return setError(T("badEmail"));
     setBusy(true);
     try {
-      const res = await doForgot({ data: { phone: f.phone } });
-      setStep("code");
-      setNotice(T("codeSent"));
-      setDevCode(res.devCode ?? null);
+      const res = await doForgot({ data: { email: f.email } });
+      afterSend(res.devCode ?? null);
     } catch {
       setError(T("generic"));
     } finally {
@@ -180,11 +211,11 @@ export function AuthView({ lang }: { lang: Lang }) {
     setBusy(true);
     try {
       const res = await doReset({
-        data: { phone: f.phone, code: f.code, password: f.password },
+        data: { email: f.email, code: f.code, password: f.password },
       });
       if (!res.ok) setError(T("badCode"));
       else {
-        const { error: err } = await signInWithPhone(f.phone, f.password);
+        const { error: err } = await signInWithEmail(f.email, f.password);
         if (err) {
           switchMode("login");
           setNotice(T("resetOk"));
@@ -198,14 +229,17 @@ export function AuthView({ lang }: { lang: Lang }) {
   };
 
   const resend = async () => {
+    if (cooldown > 0 || busy) return;
     setBusy(true);
+    setError(null);
     try {
       const res =
         mode === "register"
-          ? await doResend({ data: { phone: f.phone } })
-          : await doForgot({ data: { phone: f.phone } });
-      setDevCode(res.devCode ?? null);
-      setNotice(T("codeSent"));
+          ? await doResend({ data: { email: f.email } })
+          : await doForgot({ data: { email: f.email } });
+      afterSend(res.devCode ?? null);
+    } catch {
+      setError(T("generic"));
     } finally {
       setBusy(false);
     }
@@ -235,6 +269,17 @@ export function AuthView({ lang }: { lang: Lang }) {
           ? submitForgot
           : submitReset;
 
+  const submitLabel =
+    mode === "login"
+      ? T("submitLogin")
+      : mode === "register"
+        ? step === "form"
+          ? T("submitRegister")
+          : T("submitCode")
+        : step === "form"
+          ? T("sendCode")
+          : T("save");
+
   return (
     <div className="container-page py-10 sm:py-14">
       <div className="mx-auto w-full max-w-md rounded-md border border-border bg-card p-5 shadow-plate sm:p-7">
@@ -250,31 +295,33 @@ export function AuthView({ lang }: { lang: Lang }) {
 
         <form onSubmit={onSubmit} className="mt-5 space-y-3">
           {mode === "register" && step === "form" && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                required
-                className={input}
-                placeholder={T("firstName")}
-                value={f.firstName}
-                maxLength={60}
-                onChange={(e) => set("firstName", e.target.value)}
-              />
-              <input
-                required
-                className={input}
-                placeholder={T("lastName")}
-                value={f.lastName}
-                maxLength={60}
-                onChange={(e) => set("lastName", e.target.value)}
-              />
-            </div>
+            <input
+              required
+              className={input}
+              placeholder={T("nickname")}
+              value={f.nickname}
+              maxLength={40}
+              onChange={(e) => set("nickname", e.target.value)}
+            />
           )}
 
           {step === "form" && (
             <input
               required
+              type="email"
+              autoComplete="email"
+              className={input}
+              placeholder={T("email")}
+              value={f.email}
+              maxLength={255}
+              onChange={(e) => set("email", e.target.value)}
+            />
+          )}
+
+          {mode === "register" && step === "form" && (
+            <input
+              required
               type="tel"
-              inputMode="tel"
               autoComplete="tel"
               className={input}
               placeholder="+380 50 235 33 00"
@@ -284,19 +331,7 @@ export function AuthView({ lang }: { lang: Lang }) {
             />
           )}
 
-          {step === "code" && (
-            <input
-              required
-              inputMode="numeric"
-              className={input}
-              placeholder={T("code")}
-              value={f.code}
-              maxLength={8}
-              onChange={(e) => set("code", e.target.value)}
-            />
-          )}
-
-          {(mode !== "forgot" || step === "code") && (
+          {((mode !== "forgot" && step === "form") || (mode === "forgot" && step === "code")) && (
             <input
               required
               type="password"
@@ -309,65 +344,71 @@ export function AuthView({ lang }: { lang: Lang }) {
             />
           )}
 
-          {notice && <p className="text-sm text-muted-foreground">{notice}</p>}
+          {step === "code" && (
+            <input
+              required
+              inputMode="numeric"
+              className={`${input} tracking-[0.4em] text-center text-lg`}
+              placeholder={T("code")}
+              value={f.code}
+              maxLength={6}
+              onChange={(e) => set("code", e.target.value.replace(/\D/g, ""))}
+            />
+          )}
+
+          {notice && (
+            <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">{notice}</p>
+          )}
           {devCode && (
-            <p className="rounded-sm bg-muted px-3 py-2 text-sm">
-              {T("devCode")}: <strong>{devCode}</strong>
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {T("devCode")}: <b>{devCode}</b>
             </p>
           )}
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && (
+            <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-sm bg-accent px-5 py-3 text-sm font-bold text-accent-foreground transition-transform hover:-translate-y-0.5 disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
           >
-            {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
-            {mode === "login"
-              ? T("submitLogin")
-              : mode === "register"
-                ? step === "form"
-                  ? T("submitRegister")
-                  : T("submitCode")
-                : step === "form"
-                  ? T("sendCode")
-                  : T("save")}
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {submitLabel}
           </button>
 
           {step === "code" && (
             <button
               type="button"
               onClick={resend}
-              disabled={busy}
-              className="w-full text-sm text-muted-foreground underline-offset-4 hover:underline"
+              disabled={busy || cooldown > 0}
+              className="w-full rounded-lg border border-border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted disabled:opacity-60"
             >
-              {T("resend")}
+              {cooldown > 0 ? `${T("wait")} ${cooldown} c` : T("resend")}
             </button>
           )}
-        </form>
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 text-sm">
-          {mode === "login" ? (
+          {mode === "login" && (
             <button
               type="button"
               onClick={() => switchMode("forgot")}
-              className="text-muted-foreground underline-offset-4 hover:underline"
+              className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
             >
-              {T("forgot")}
+              {T("forgotLink")}
             </button>
-          ) : (
+          )}
+          {mode === "forgot" && (
             <button
               type="button"
               onClick={() => switchMode("login")}
-              className="text-muted-foreground underline-offset-4 hover:underline"
+              className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
             >
-              {T("toLogin")}
+              {T("backToLogin")}
             </button>
           )}
-          <Link to={href("/products.php", lang)} className="text-muted-foreground underline-offset-4 hover:underline">
-            {lang === "uk" ? "До каталогу" : "В каталог"}
-          </Link>
-        </div>
+        </form>
       </div>
     </div>
   );
