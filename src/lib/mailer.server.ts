@@ -105,6 +105,14 @@ const b64 = (value: string) => {
 /** RFC 2047 encoding so Cyrillic subjects and sender names survive. */
 const mimeWord = (value: string) => `=?UTF-8?B?${b64(value)}?=`;
 
+/** Unique RFC 5322 Message-ID — Gmail rejects mail without it (550-5.7.1). */
+function messageId(domain: string): string {
+  const rnd = new Uint8Array(12);
+  crypto.getRandomValues(rnd);
+  const rand = [...rnd].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `<${Date.now().toString(36)}.${rand}@${domain}>`;
+}
+
 function smtpConfig() {
   const host = process.env["SMTP_HOST"];
   const user = process.env["SMTP_USER"];
@@ -139,9 +147,11 @@ export async function sendMail(params: {
     return expect(socket, codes);
   };
 
+  const senderDomain = cfg.fromEmail.split("@")[1] ?? cfg.host;
+
   try {
     await expect(socket, [220]);
-    await say(`EHLO ${cfg.host}`, [250]);
+    await say(`EHLO ${senderDomain}`, [250]);
     await say("AUTH LOGIN", [334]);
     await say(b64(cfg.user), [334]);
     await say(b64(cfg.password), [235]);
@@ -155,6 +165,7 @@ export async function sendMail(params: {
       `To: <${params.to}>`,
       `Subject: ${mimeWord(params.subject)}`,
       `Date: ${new Date().toUTCString()}`,
+      `Message-ID: ${messageId(senderDomain)}`,
       "MIME-Version: 1.0",
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       "",
