@@ -37,7 +37,6 @@ const TXT = {
     ru: "Мы отправили код подтверждения на вашу почту. Проверьте папку «Спам».",
     uk: "Ми надіслали код підтвердження на вашу пошту. Перевірте теку «Спам».",
   },
-  devCode: { ru: "Тестовый код", uk: "Тестовий код" },
   badEmail: { ru: "Введите корректный e-mail", uk: "Введіть коректний e-mail" },
   badPhone: { ru: "Введите корректный номер телефона", uk: "Введіть коректний номер телефону" },
   badNickname: { ru: "Ник: от 2 до 40 символов", uk: "Нік: від 2 до 40 символів" },
@@ -81,7 +80,6 @@ export function AuthView({ lang }: { lang: Lang }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [devCode, setDevCode] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "code">("form");
   const [cooldown, setCooldown] = useState(0);
 
@@ -105,15 +103,13 @@ export function AuthView({ lang }: { lang: Lang }) {
     setStep("form");
     setError(null);
     setNotice(null);
-    setDevCode(null);
   };
 
   const goAccount = () => navigate({ to: href("/account", lang) });
 
-  const afterSend = (code: string | null) => {
+  const afterSend = () => {
     setStep("code");
     setNotice(T("codeSent"));
-    setDevCode(code);
     setCooldown(60);
   };
 
@@ -162,7 +158,7 @@ export function AuthView({ lang }: { lang: Lang }) {
                   : "generic",
           ),
         );
-      } else afterSend(res.devCode ?? null);
+      } else afterSend();
     } catch {
       setError(T("generic"));
     } finally {
@@ -196,7 +192,7 @@ export function AuthView({ lang }: { lang: Lang }) {
     setBusy(true);
     try {
       const res = await doForgot({ data: { email: f.email } });
-      afterSend(res.devCode ?? null);
+      afterSend();
     } catch {
       setError(T("generic"));
     } finally {
@@ -237,7 +233,7 @@ export function AuthView({ lang }: { lang: Lang }) {
         mode === "register"
           ? await doResend({ data: { email: f.email } })
           : await doForgot({ data: { email: f.email } });
-      afterSend(res.devCode ?? null);
+      afterSend();
     } catch {
       setError(T("generic"));
     } finally {
@@ -358,11 +354,6 @@ export function AuthView({ lang }: { lang: Lang }) {
 
           {notice && (
             <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">{notice}</p>
-          )}
-          {devCode && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              {T("devCode")}: <b>{devCode}</b>
-            </p>
           )}
           {error && (
             <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
