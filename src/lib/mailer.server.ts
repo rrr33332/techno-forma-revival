@@ -147,9 +147,11 @@ export async function sendMail(params: {
     return expect(socket, codes);
   };
 
+  const senderDomain = cfg.fromEmail.split("@")[1] ?? cfg.host;
+
   try {
     await expect(socket, [220]);
-    await say(`EHLO ${cfg.host}`, [250]);
+    await say(`EHLO ${senderDomain}`, [250]);
     await say("AUTH LOGIN", [334]);
     await say(b64(cfg.user), [334]);
     await say(b64(cfg.password), [235]);
@@ -163,6 +165,7 @@ export async function sendMail(params: {
       `To: <${params.to}>`,
       `Subject: ${mimeWord(params.subject)}`,
       `Date: ${new Date().toUTCString()}`,
+      `Message-ID: ${messageId(senderDomain)}`,
       "MIME-Version: 1.0",
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       "",
