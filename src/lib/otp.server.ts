@@ -1,20 +1,20 @@
 /**
- * OtpService — one-time codes delivered by e-mail (registration confirmation
- * and password recovery). Delivery goes through the project SMTP account.
+ * OtpService — one-time codes delivered by e-mail only (registration
+ * confirmation and password recovery). No SMS path exists: the customer's
+ * phone number is stored as profile data, never used for code delivery.
  */
 
 import { sendMail, isMailConfigured } from "./mailer.server";
-import { passwordResetEmail, registrationEmail } from "./email-templates.server";
+import {
+  passwordResetEmail,
+  registrationEmail,
+  registrationResendEmail,
+} from "./email-templates.server";
 
 export type OtpPurpose = "registration" | "password_reset";
 
 const TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
-
-/** True only when SMTP is not configured: the code is then returned for local testing. */
-export function isDevOtp(): boolean {
-  return !isMailConfigured();
-}
 
 function randomCode(): string {
   const bytes = new Uint32Array(1);
@@ -33,15 +33,15 @@ async function deliver(params: {
   name: string;
   code: string;
   purpose: OtpPurpose;
+  resend: boolean;
 }): Promise<void> {
-  if (!isMailConfigured()) {
-    console.info(`[OtpService:dev] ${params.purpose} code for ${params.email}: ${params.code}`);
-    return;
-  }
+  if (!isMailConfigured()) throw new Error("smtp_not_configured");
   const letter =
-    params.purpose === "registration"
-      ? registrationEmail(params.code, params.name)
-      : passwordResetEmail(params.code, params.name);
+    params.purpose === "password_reset"
+      ? passwordResetEmail(params.code, params.name)
+      : params.resend
+        ? registrationResendEmail(params.code, params.name)
+        : registrationEmail(params.code, params.name);
   await sendMail({ to: params.email, ...letter });
 }
 
@@ -58,8 +58,9 @@ export async function issueOtp(
     phone?: string | null;
     name?: string;
     purpose: OtpPurpose;
+    resend?: boolean;
   },
-): Promise<{ devCode: string | null }> {
+): Promise<void> {
   const email = params.email.trim().toLowerCase();
   const code = randomCode();
   const code_hash = await hashCode(email, code);
@@ -81,8 +82,13 @@ export async function issueOtp(
   });
   if (error) throw new Error("otp_issue_failed");
 
-  await deliver({ email, name: params.name ?? "", code, purpose: params.purpose });
-  return { devCode: isDevOtp() ? code : null };
+  await deliver({
+    email,
+    name: params.name ?? "",
+    code,
+    purpose: params.purpose,
+    resend: params.resend ?? false,
+  });
 }
 
 export type OtpResult = "ok" | "invalid" | "expired" | "too_many";
