@@ -105,6 +105,14 @@ const b64 = (value: string) => {
 /** RFC 2047 encoding so Cyrillic subjects and sender names survive. */
 const mimeWord = (value: string) => `=?UTF-8?B?${b64(value)}?=`;
 
+/** Unique RFC 5322 Message-ID — Gmail rejects mail without it (550-5.7.1). */
+function messageId(domain: string): string {
+  const rnd = new Uint8Array(12);
+  crypto.getRandomValues(rnd);
+  const rand = [...rnd].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `<${Date.now().toString(36)}.${rand}@${domain}>`;
+}
+
 function smtpConfig() {
   const host = process.env["SMTP_HOST"];
   const user = process.env["SMTP_USER"];
