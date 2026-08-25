@@ -4,8 +4,12 @@ import { checkPassword, normalizePhone } from "./phone";
 
 /**
  * AuthService (server side): registration, e-mail confirmation and
- * OTP-based password recovery. The e-mail is the login identifier; the
- * phone number and the nickname are required profile data.
+ * OTP-based password recovery.
+ *
+ * The customer's real e-mail is the login identifier and is stored as-is.
+ * The phone number is stored as profile data only — it is never turned into
+ * a synthetic e-mail and never used to deliver codes (no SMS path exists).
+ * info@technoforma.com.ua is only the SMTP sender, never a customer address.
  */
 
 const emailField = z
@@ -47,8 +51,11 @@ type ProfileRow = {
   id: string;
   email: string | null;
   nickname: string | null;
+  phone: string | null;
   email_verified: boolean;
 };
+
+const PROFILE_COLUMNS = "id, email, nickname, phone, email_verified";
 
 export const registerAccount = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => registerSchema.parse(data))
@@ -56,9 +63,10 @@ export const registerAccount = createServerFn({ method: "POST" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { issueOtp } = await import("./otp.server");
 
+    // 1. Uniqueness is checked per field so the user gets the exact reason.
     const { data: byEmail } = await supabaseAdmin
       .from("profiles")
-      .select("id, email, nickname, email_verified")
+      .select(PROFILE_COLUMNS)
       .ilike("email", data.email)
       .maybeSingle<ProfileRow>();
 
@@ -71,15 +79,27 @@ export const registerAccount = createServerFn({ method: "POST" })
       .maybeSingle<{ id: string }>();
     if (byNick && byNick.id !== byEmail?.id) return { ok: false as const, error: "nickname_taken" };
 
+    const { data: byPhone } = await supabaseAdmin
+      .from("profiles")
+      .select("id, email_verified")
+      .eq("phone", data.phone)
+      .maybeSingle<{ id: string; email_verified: boolean }>();
+    if (byPhone && byPhone.id !== byEmail?.id) {
+      // A confirmed account already owns this number; an abandoned unconfirmed
+      // registration is released so the number can be reused.
+      if (byPhone.email_verified) return { ok: false as const, error: "phone_taken" };
+      await supabaseAdmin.auth.admin.deleteUser(byPhone.id);
+    }
+
     let userId = byEmail?.id ?? null;
 
     if (!userId) {
+      // 2. Pending registration: the auth user exists but stays unconfirmed,
+      //    so sign-in is impossible until the e-mail code is verified.
       const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
         email: data.email,
-        phone: data.phone,
         password: data.password,
-        email_confirm: true,
-        phone_confirm: true,
+        email_confirm: false,
         user_metadata: { nickname: data.nickname, phone: data.phone },
       });
       if (error || !created.user) {
@@ -100,15 +120,21 @@ export const registerAccount = createServerFn({ method: "POST" })
       if (profileError) {
         console.error("[registerAccount] profile insert failed", profileError);
         await supabaseAdmin.auth.admin.deleteUser(userId);
-        const taken = /duplicate|unique/i.test(profileError.message);
-        return { ok: false as const, error: taken ? ("phone_taken" as const) : ("failed" as const) };
+        if (/nickname/i.test(profileError.message)) {
+          return { ok: false as const, error: "nickname_taken" as const };
+        }
+        if (/phone/i.test(profileError.message)) {
+          return { ok: false as const, error: "phone_taken" as const };
+        }
+        if (/email/i.test(profileError.message)) {
+          return { ok: false as const, error: "email_taken" as const };
+        }
+        return { ok: false as const, error: "failed" as const };
       }
     } else {
       // Unfinished registration for the same e-mail — refresh it.
       await supabaseAdmin.auth.admin.updateUserById(userId, {
         password: data.password,
-        phone: data.phone,
-        phone_confirm: true,
         user_metadata: { nickname: data.nickname, phone: data.phone },
       });
       await supabaseAdmin
@@ -121,15 +147,21 @@ export const registerAccount = createServerFn({ method: "POST" })
         .eq("id", userId);
     }
 
-    const { devCode } = await issueOtp(supabaseAdmin, {
-      userId,
-      email: data.email,
-      phone: data.phone,
-      name: data.nickname,
-      purpose: "registration",
-    });
+    // 3. The 6-digit code goes to the address the customer typed.
+    try {
+      await issueOtp(supabaseAdmin, {
+        userId,
+        email: data.email,
+        phone: data.phone,
+        name: data.nickname,
+        purpose: "registration",
+      });
+    } catch (error) {
+      console.error("[registerAccount] otp delivery failed", error);
+      return { ok: false as const, error: "mail_failed" as const };
+    }
 
-    return { ok: true as const, devCode };
+    return { ok: true as const };
   });
 
 const otpSchema = z.object({ email: emailField, code: z.string().trim().min(4).max(8) });
@@ -138,9 +170,9 @@ async function findByEmail(email: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data } = await supabaseAdmin
     .from("profiles")
-    .select("id, email, nickname, email_verified, phone")
+    .select(PROFILE_COLUMNS)
     .ilike("email", email)
-    .maybeSingle<ProfileRow & { phone: string | null }>();
+    .maybeSingle<ProfileRow>();
   return { supabaseAdmin, profile: data ?? null };
 }
 
@@ -161,10 +193,16 @@ export const confirmRegistration = createServerFn({ method: "POST" })
     });
     if (result !== "ok") return { ok: false as const, error: result };
 
-    await supabaseAdmin
-      .from("profiles")
-      .update({ email_verified: true, phone_verified: true })
-      .eq("id", profile.id);
+    // 4. Only now does the pending registration become a real account.
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(profile.id, {
+      email_confirm: true,
+    });
+    if (error) {
+      console.error("[confirmRegistration] confirm failed", error);
+      return { ok: false as const, error: "invalid" };
+    }
+
+    await supabaseAdmin.from("profiles").update({ email_verified: true }).eq("id", profile.id);
     return { ok: true as const };
   });
 
@@ -175,16 +213,22 @@ export const resendRegistrationCode = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { supabaseAdmin, profile } = await findByEmail(data.email);
     const { issueOtp } = await import("./otp.server");
-    if (!profile || profile.email_verified) return { ok: true as const, devCode: null };
+    if (!profile || profile.email_verified) return { ok: true as const };
 
-    const { devCode } = await issueOtp(supabaseAdmin, {
-      userId: profile.id,
-      email: data.email,
-      phone: profile.phone,
-      name: profile.nickname ?? "",
-      purpose: "registration",
-    });
-    return { ok: true as const, devCode };
+    try {
+      await issueOtp(supabaseAdmin, {
+        userId: profile.id,
+        email: data.email,
+        phone: profile.phone,
+        name: profile.nickname ?? "",
+        purpose: "registration",
+        resend: true,
+      });
+    } catch (error) {
+      console.error("[resendRegistrationCode] otp delivery failed", error);
+      return { ok: false as const, error: "mail_failed" as const };
+    }
+    return { ok: true as const };
   });
 
 /** Password recovery: the code goes to the account e-mail. */
@@ -194,16 +238,20 @@ export const requestPasswordReset = createServerFn({ method: "POST" })
     const { supabaseAdmin, profile } = await findByEmail(data.email);
     const { issueOtp } = await import("./otp.server");
     // Always report success so the endpoint cannot enumerate customers.
-    if (!profile) return { ok: true as const, devCode: null };
+    if (!profile) return { ok: true as const };
 
-    const { devCode } = await issueOtp(supabaseAdmin, {
-      userId: profile.id,
-      email: data.email,
-      phone: profile.phone,
-      name: profile.nickname ?? "",
-      purpose: "password_reset",
-    });
-    return { ok: true as const, devCode };
+    try {
+      await issueOtp(supabaseAdmin, {
+        userId: profile.id,
+        email: data.email,
+        phone: profile.phone,
+        name: profile.nickname ?? "",
+        purpose: "password_reset",
+      });
+    } catch (error) {
+      console.error("[requestPasswordReset] otp delivery failed", error);
+    }
+    return { ok: true as const };
   });
 
 const resetSchema = z.object({
@@ -229,6 +277,7 @@ export const resetPasswordWithCode = createServerFn({ method: "POST" })
 
     const { error } = await supabaseAdmin.auth.admin.updateUserById(profile.id, {
       password: data.password,
+      email_confirm: true,
     });
     if (error) return { ok: false as const, error: "invalid" };
 
