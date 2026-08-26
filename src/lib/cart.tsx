@@ -10,6 +10,8 @@ import {
 export type CartLine = {
   key: string;
   productId: string;
+  /** Supplier article code, forwarded to the CRM on checkout. */
+  sku: string | null;
   name: string;
   image: string;
   variant: string | null;

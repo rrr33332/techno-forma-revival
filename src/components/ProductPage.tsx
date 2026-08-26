@@ -37,6 +37,7 @@ export function ProductPage({ slug, lang }: { slug: string; lang: Lang }) {
     for (let i = 0; i < qty; i++) {
       add({
         productId: product.id,
+        sku: product.sku,
         name: product.name,
         image: product.image,
         variant: variant?.label ?? null,

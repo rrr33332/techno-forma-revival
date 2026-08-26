@@ -64,6 +64,7 @@ export function CartView({ lang }: { lang: Lang }) {
                 }
               : null,
           items: lines.map((l) => ({
+            sku: l.sku ?? null,
             name: l.name,
             variant: l.variant,
             price: l.price,
