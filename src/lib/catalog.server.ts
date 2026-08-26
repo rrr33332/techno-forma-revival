@@ -16,7 +16,7 @@ import {
 
 
 const PRODUCT_COLUMNS =
-  "external_id, slug, name_ru, name_uk, alt_ru, alt_uk, image_path, gallery, specs_ru, specs_uk, variants_ru, variants_uk, description_ru, description_uk, price, old_price, in_stock, is_new, is_special, brand, sort_order, category_id";
+  "external_id, sku, slug, name_ru, name_uk, alt_ru, alt_uk, image_path, gallery, specs_ru, specs_uk, variants_ru, variants_uk, description_ru, description_uk, price, old_price, in_stock, is_new, is_special, brand, sort_order, category_id";
 
 export function publicClient() {
   const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
@@ -61,6 +61,7 @@ export function toProduct(row: Row, lang: Lang, categorySlug: string): Product {
   const base = { name, slug, category: categorySlug, specs };
   return {
     id: String(row["external_id"] ?? row["slug"]),
+    sku: row["sku"] ? String(row["sku"]) : null,
     slug,
     name,
     alt: productAlt(base, lang),

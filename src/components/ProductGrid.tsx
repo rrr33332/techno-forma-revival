@@ -30,6 +30,7 @@ function ProductCard({
     if (!price) return;
     add({
       productId: product.id,
+      sku: product.sku,
       name: product.name,
       image: product.image,
       variant: variant?.label ?? null,
@@ -212,6 +213,7 @@ export function ProductGrid({
             if (!price) return;
             add({
               productId: p.id,
+              sku: p.sku,
               name: p.name,
               image: p.image,
               variant: p.variants[0]?.label ?? null,

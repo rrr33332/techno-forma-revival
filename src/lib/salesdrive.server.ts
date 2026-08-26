@@ -1,55 +1,295 @@
 /**
- * SalesDriveService — adapter prepared for the future CRM integration.
+ * SalesDriveService — live CRM integration (server only).
  *
- * NOT connected yet: no API URL / key exists, so nothing is invented here.
- * When the credentials arrive, set the environment variables
+ * Creating an order uses the verified form handler endpoint
+ * `POST {SALESDRIVE_API_URL}/handler/` with the API key in the `form` field.
+ * The REST endpoint `/api/order/add/` is NOT used: it answers 403 (CSRF).
  *
- *   SALESDRIVE_API_URL=
- *   SALESDRIVE_API_KEY=
+ * Reading orders uses `GET {SALESDRIVE_API_URL}/api/order/list/` with the
+ * `Form-Api-Key` header, filtered by `filter[id][]` or `filter[externalId]`.
  *
- * and implement the request inside `sendOrder` (marked below). No other part
- * of checkout, the account area or the order flow has to change: order
- * creation already calls `SalesDriveService.sendOrder(order)` and ignores a
- * disabled adapter.
+ * Idempotency: every order carries `externalId = tf-<order_no>`. The handler
+ * itself does NOT deduplicate, so before sending we (1) skip orders that
+ * already store a `salesdrive_order_id` and (2) look the externalId up in the
+ * CRM and adopt an existing order instead of creating a second one. That makes
+ * a retry safe at any point.
  */
+
+import { statusFromSalesDrive } from "./order-status";
+
+export type SalesDriveItem = {
+  sku: string | null;
+  name: string;
+  variant: string | null;
+  price: number;
+  qty: number;
+};
 
 export type SalesDriveOrder = {
   orderNo: number;
-  userId: string;
+  userId: string | null;
   firstName: string;
   lastName: string;
   phone: string;
+  email?: string | null;
   comment: string | null;
   total: number;
+  delivery?: "novaposhta" | "pickup" | "carrier" | string | null;
   city: string | null;
   warehouse: string | null;
   warehouseAddress: string | null;
-  items: {
-    sku: string | null;
-    name: string;
-    variant: string | null;
-    price: number;
-    qty: number;
-  }[];
+  items: SalesDriveItem[];
 };
 
-export type SalesDriveResult = { sent: boolean; reason?: string };
+export type SalesDriveResult =
+  | { sent: true; orderId: number; adopted: boolean }
+  | { sent: false; reason: string };
+
+/** Known SalesDrive dictionary ids — do not invent new ones. */
+const SHIPPING = { novaposhta: "id_9", pickup: "id_10", carrier: "id_9" } as const;
+const PAYMENT_COD = "id_13";
+
+export function externalIdFor(orderNo: number): string {
+  return `tf-${orderNo}`;
+}
+
+function config() {
+  const url = (process.env["SALESDRIVE_API_URL"] ?? "").replace(/\/+$/, "");
+  const key = process.env["SALESDRIVE_API_KEY"] ?? "";
+  return { url, key, enabled: Boolean(url && key) };
+}
+
+export type SalesDriveRemoteOrder = {
+  id: number;
+  statusId: number | null;
+  status: string | null;
+  externalId: string | null;
+  trackingNumber: string | null;
+};
+
+function readRemote(row: Record<string, unknown>): SalesDriveRemoteOrder {
+  const statusId = row["statusId"] == null ? null : Number(row["statusId"]);
+  const delivery = row["ord_delivery_data"];
+  let tracking: string | null = null;
+  if (Array.isArray(delivery) && delivery.length) {
+    const first = delivery[0] as Record<string, unknown> | undefined;
+    const raw = first?.["trackingNumber"];
+    tracking = typeof raw === "string" && raw.trim() ? raw.trim() : null;
+  }
+  return {
+    id: Number(row["id"]),
+    statusId,
+    status: statusFromSalesDrive(statusId),
+    externalId: row["externalId"] ? String(row["externalId"]) : null,
+    trackingNumber: tracking,
+  };
+}
+
+async function list(params: Record<string, string>): Promise<SalesDriveRemoteOrder[]> {
+  const { url, key, enabled } = config();
+  if (!enabled) return [];
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${url}/api/order/list/?${qs}`, {
+    headers: { "Form-Api-Key": key, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`salesdrive_list_${res.status}`);
+  const json = (await res.json()) as { data?: Record<string, unknown>[] };
+  return (json.data ?? []).map(readRemote);
+}
 
 export const SalesDriveService = {
   isEnabled(): boolean {
-    return Boolean(process.env["SALESDRIVE_API_URL"] && process.env["SALESDRIVE_API_KEY"]);
+    return config().enabled;
+  },
+
+  /** Reads one CRM order by its SalesDrive id. */
+  async getOrder(id: number): Promise<SalesDriveRemoteOrder | null> {
+    const rows = await list({ "filter[id][]": String(id) });
+    return rows.find((r) => r.id === id) ?? null;
+  },
+
+  /** Finds a CRM order previously created for this site order. */
+  async findByExternalId(externalId: string): Promise<SalesDriveRemoteOrder | null> {
+    const rows = await list({ "filter[externalId]": externalId });
+    const exact = rows.filter((r) => r.externalId === externalId);
+    if (!exact.length) return null;
+    // Oldest wins so retries always converge on the same CRM order.
+    return exact.reduce((a, b) => (a.id <= b.id ? a : b));
   },
 
   async sendOrder(order: SalesDriveOrder): Promise<SalesDriveResult> {
-    if (!SalesDriveService.isEnabled()) {
-      // Stub mode — the order is stored locally and simply not forwarded.
-      console.info(`[SalesDrive] disabled, order ${order.orderNo} not forwarded`);
-      return { sent: false, reason: "disabled" };
+    const { url, key, enabled } = config();
+    if (!enabled) return { sent: false, reason: "disabled" };
+
+    const externalId = externalIdFor(order.orderNo);
+
+    // Idempotency guard: never create a second CRM order for the same site order.
+    try {
+      const existing = await SalesDriveService.findByExternalId(externalId);
+      if (existing) return { sent: true, orderId: existing.id, adopted: true };
+    } catch (e) {
+      console.error("[SalesDrive] externalId lookup failed", e);
     }
 
-    // TODO(SalesDrive): build and POST the CRM payload here using
-    // process.env['SALESDRIVE_API_URL'] and process.env['SALESDRIVE_API_KEY'].
-    console.warn("[SalesDrive] credentials present but the adapter is not implemented yet");
-    return { sent: false, reason: "not_implemented" };
+    const shipping =
+      SHIPPING[(order.delivery ?? "novaposhta") as keyof typeof SHIPPING] ?? SHIPPING.novaposhta;
+
+    const address = [order.city, order.warehouse, order.warehouseAddress]
+      .filter(Boolean)
+      .join(", ");
+
+    const payload: Record<string, unknown> = {
+      form: key,
+      getResultData: 1,
+      externalId,
+      fName: order.firstName || "Клиент",
+      lName: order.lastName || "",
+      phone: order.phone,
+      comment: [order.comment, ...order.items.filter((i) => i.variant).map((i) => `${i.name}: ${i.variant}`)]
+        .filter(Boolean)
+        .join("\n") || "",
+      shipping_method: shipping,
+      payment_method: PAYMENT_COD,
+      products: order.items.map((i) => ({
+        id: i.sku ?? i.name,
+        amount: i.qty,
+        costPerItem: i.price,
+        discount: 0,
+      })),
+    };
+    if (order.email) payload["email"] = order.email;
+    if (address) payload["adresDostavki"] = address;
+    if (order.delivery === "novaposhta" && order.city) {
+      const branch = order.warehouse?.match(/\d+/)?.[0];
+      payload["ord_delivery_data"] = [
+        {
+          provider: "novaposhta",
+          type: "WarehouseWarehouse",
+          cityName: order.city,
+          address: order.warehouse ?? "",
+          ...(branch ? { branchNumber: Number(branch) } : {}),
+        },
+      ];
+    }
+
+    const res = await fetch(`${url}/handler/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      console.error("[SalesDrive] handler HTTP", res.status, text.slice(0, 300));
+      return { sent: false, reason: `http_${res.status}` };
+    }
+
+    let parsed: { success?: boolean; data?: { orderId?: number }; message?: string } = {};
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { sent: false, reason: "bad_response" };
+    }
+    const orderId = parsed.data?.orderId;
+    if (!parsed.success || !orderId) {
+      return { sent: false, reason: parsed.message ? String(parsed.message).slice(0, 200) : "rejected" };
+    }
+    return { sent: true, orderId, adopted: false };
   },
 };
+
+type AdminClient = Awaited<
+  typeof import("@/integrations/supabase/client.server")
+>["supabaseAdmin"];
+
+/**
+ * Pushes one site order into the CRM and records the outcome.
+ * Safe to call repeatedly: an already-synced order is left untouched.
+ */
+export async function syncOrderToSalesDrive(
+  admin: AdminClient,
+  orderId: string,
+): Promise<{ ok: boolean; salesDriveId?: number; reason?: string }> {
+  const { data: order } = await admin
+    .from("orders")
+    .select(
+      "id, order_no, customer_name, phone, email, comment, total, delivery, city, np_city, np_warehouse, np_warehouse_address, user_id, salesdrive_order_id",
+    )
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (!order) return { ok: false, reason: "order_missing" };
+  if (order.salesdrive_order_id) {
+    return { ok: true, salesDriveId: Number(order.salesdrive_order_id) };
+  }
+
+  const { data: items } = await admin
+    .from("order_items")
+    .select("product_sku, product_name, variant_label, unit_price, quantity")
+    .eq("order_id", orderId);
+
+  const [firstName, ...rest] = (order.customer_name ?? "").trim().split(/\s+/);
+
+  try {
+    const result = await SalesDriveService.sendOrder({
+      orderNo: Number(order.order_no),
+      userId: order.user_id ?? null,
+      firstName: firstName ?? "",
+      lastName: rest.join(" "),
+      phone: order.phone ?? "",
+      email: order.email ?? null,
+      comment: order.comment ?? null,
+      total: Number(order.total ?? 0),
+      delivery: order.delivery ?? "novaposhta",
+      city: order.np_city ?? order.city ?? null,
+      warehouse: order.np_warehouse ?? null,
+      warehouseAddress: order.np_warehouse_address ?? null,
+      items: (items ?? []).map((i) => ({
+        sku: i.product_sku ?? null,
+        name: i.product_name,
+        variant: i.variant_label ?? null,
+        price: Number(i.unit_price),
+        qty: i.quantity,
+      })),
+    });
+
+    if (!result.sent) {
+      await admin
+        .from("orders")
+        .update({
+          salesdrive_sync_status: result.reason === "disabled" ? "disabled" : "error",
+          salesdrive_sync_error: result.reason,
+        })
+        .eq("id", orderId);
+      return { ok: false, reason: result.reason };
+    }
+
+    let statusId: number | null = null;
+    try {
+      statusId = (await SalesDriveService.getOrder(result.orderId))?.statusId ?? null;
+    } catch {
+      /* status is refreshed by the webhook anyway */
+    }
+
+    await admin
+      .from("orders")
+      .update({
+        salesdrive_order_id: result.orderId,
+        salesdrive_status_id: statusId,
+        salesdrive_sync_status: "synced",
+        salesdrive_sync_error: null,
+        salesdrive_synced_at: new Date().toISOString(),
+      })
+      .eq("id", orderId);
+
+    return { ok: true, salesDriveId: result.orderId };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message.slice(0, 200) : "unknown";
+    console.error("[SalesDrive] sync failed", reason);
+    await admin
+      .from("orders")
+      .update({ salesdrive_sync_status: "error", salesdrive_sync_error: reason })
+      .eq("id", orderId);
+    return { ok: false, reason };
+  }
+}
