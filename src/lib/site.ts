@@ -7,6 +7,8 @@ export type Variant = { label: string; price: number };
 /** Product as delivered by the catalog server functions (MasteraForm-synced DB). */
 export type Product = {
   id: string;
+  /** Supplier article code — used to match the product inside SalesDrive. */
+  sku: string | null;
   slug: string;
   name: string;
   alt: string;
