@@ -47,6 +47,28 @@ export const placeOrder = createServerFn({ method: "POST" })
     const total = data.items.reduce((n, i) => n + i.price * i.qty, 0);
     const np = data.delivery === "novaposhta" ? (data.np ?? null) : null;
 
+    // Double-submit guard: an identical order created moments ago is reused
+    // instead of being duplicated (double click, page refresh, retry).
+    const since = new Date(Date.now() - 3 * 60_000).toISOString();
+    const { data: recent } = await supabaseAdmin
+      .from("orders")
+      .select("id, order_no")
+      .eq("user_id", context.userId)
+      .eq("total", total)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (recent) {
+      try {
+        await syncOrderToSalesDrive(supabaseAdmin, recent.id);
+      } catch (e) {
+        console.error("[SalesDrive] resync failed", e);
+      }
+      return { ok: true as const, orderNo: recent.order_no };
+    }
+
     const { data: order, error } = await supabaseAdmin
       .from("orders")
       .insert({
