@@ -69,13 +69,13 @@ export const Route = createFileRoute("/api/public/salesdrive/webhook")({
         }
         if (!remote) return new Response("order not found in crm", { status: 404 });
 
-        const patch: Record<string, unknown> = {
+        const patch = {
           salesdrive_status_id: remote.statusId,
           salesdrive_sync_status: "synced",
           salesdrive_synced_at: new Date().toISOString(),
+          ...(remote.status ? { status: remote.status } : {}),
+          ...(remote.trackingNumber ? { tracking_number: remote.trackingNumber } : {}),
         };
-        if (remote.status) patch["status"] = remote.status;
-        if (remote.trackingNumber) patch["tracking_number"] = remote.trackingNumber;
 
         // Match by CRM id first, then by the externalId we issued (tf-<order_no>).
         const orderNo = remote.externalId?.startsWith("tf-")
