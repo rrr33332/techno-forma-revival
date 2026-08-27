@@ -34,7 +34,7 @@ export const placeOrder = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => orderSchema.parse(data))
   .handler(async ({ data, context }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { SalesDriveService } = await import("./salesdrive.server");
+    const { syncOrderToSalesDrive } = await import("./salesdrive.server");
 
     const { data: profile } = await context.supabase
       .from("profiles")
