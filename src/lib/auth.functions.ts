@@ -284,3 +284,63 @@ export const resetPasswordWithCode = createServerFn({ method: "POST" })
     await supabaseAdmin.from("profiles").update({ email_verified: true }).eq("id", profile.id);
     return { ok: true as const };
   });
+
+/**
+ * Sign-in by e-mail OR phone.
+ *
+ * A phone number is resolved server side to the customer's real e-mail
+ * (no synthetic addresses exist), the password is verified with a
+ * publishable-key client and the resulting session is handed back so the
+ * browser can adopt it with `supabase.auth.setSession`.
+ */
+const loginSchema = z.object({
+  identifier: z.string().trim().min(3).max(255),
+  password: z.string().min(1).max(72),
+});
+
+export const signInWithIdentifier = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => loginSchema.parse(data))
+  .handler(async ({ data }) => {
+    const { createClient } = await import("@supabase/supabase-js");
+
+    let email = data.identifier.toLowerCase();
+
+    if (!email.includes("@")) {
+      const phone = normalizePhone(data.identifier);
+      if (!phone) return { ok: false as const, error: "invalid_credentials" as const };
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("email")
+        .eq("phone", phone)
+        .maybeSingle<{ email: string | null }>();
+      if (!profile?.email) return { ok: false as const, error: "invalid_credentials" as const };
+      email = profile.email;
+    }
+
+    const client = createClient(
+      process.env["SUPABASE_URL"]!,
+      process.env["SUPABASE_PUBLISHABLE_KEY"]!,
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+
+    const { data: result, error } = await client.auth.signInWithPassword({
+      email,
+      password: data.password,
+    });
+
+    if (error || !result.session) {
+      const unconfirmed = /confirm/i.test(error?.message ?? "");
+      return {
+        ok: false as const,
+        error: unconfirmed ? ("email_not_confirmed" as const) : ("invalid_credentials" as const),
+        email: unconfirmed ? email : undefined,
+      };
+    }
+
+    return {
+      ok: true as const,
+      accessToken: result.session.access_token,
+      refreshToken: result.session.refresh_token,
+    };
+  });
