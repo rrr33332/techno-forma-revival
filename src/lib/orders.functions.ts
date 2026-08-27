@@ -105,27 +105,9 @@ export const placeOrder = createServerFn({ method: "POST" })
 
     if (itemsError) throw new Error("order_items_failed");
 
-    // CRM adapter is a stub until credentials exist; a failure never breaks checkout.
+    // CRM push is idempotent (externalId) and never breaks checkout.
     try {
-      await SalesDriveService.sendOrder({
-        orderNo: order.order_no,
-        userId: context.userId,
-        firstName: profile.first_name,
-        lastName: profile.last_name,
-        phone: profile.phone ?? "",
-        comment: data.comment || null,
-        total,
-        city: np?.city || data.city || null,
-        warehouse: np?.warehouse || null,
-        warehouseAddress: np?.warehouseAddress || null,
-        items: data.items.map((i) => ({
-          sku: i.sku ?? null,
-          name: i.name,
-          variant: i.variant,
-          price: i.price,
-          qty: i.qty,
-        })),
-      });
+      await syncOrderToSalesDrive(supabaseAdmin, order.id);
     } catch (e) {
       console.error("[SalesDrive] send failed", e);
     }
