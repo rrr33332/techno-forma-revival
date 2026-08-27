@@ -33,15 +33,17 @@ const passwordField = z
   .max(72)
   .refine((v) => checkPassword(v).ok, { message: "weak_password" });
 
-const nicknameField = z
+const nameField = z
   .string()
   .trim()
   .min(2)
-  .max(40)
-  .regex(/^[\p{L}\p{N}._\- ]+$/u, { message: "invalid_nickname" });
+  .max(60)
+  .regex(/^[\p{L}\p{N}'._\- ]+$/u, { message: "invalid_name" });
 
+/** First and last name are NOT unique — only e-mail and phone are. */
 const registerSchema = z.object({
-  nickname: nicknameField,
+  firstName: nameField,
+  lastName: nameField,
   email: emailField,
   phone: phoneField,
   password: passwordField,
@@ -50,12 +52,12 @@ const registerSchema = z.object({
 type ProfileRow = {
   id: string;
   email: string | null;
-  nickname: string | null;
+  first_name: string | null;
   phone: string | null;
   email_verified: boolean;
 };
 
-const PROFILE_COLUMNS = "id, email, nickname, phone, email_verified";
+const PROFILE_COLUMNS = "id, email, first_name, phone, email_verified";
 
 export const registerAccount = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => registerSchema.parse(data))
@@ -71,13 +73,6 @@ export const registerAccount = createServerFn({ method: "POST" })
       .maybeSingle<ProfileRow>();
 
     if (byEmail?.email_verified) return { ok: false as const, error: "email_taken" };
-
-    const { data: byNick } = await supabaseAdmin
-      .from("profiles")
-      .select("id")
-      .ilike("nickname", data.nickname)
-      .maybeSingle<{ id: string }>();
-    if (byNick && byNick.id !== byEmail?.id) return { ok: false as const, error: "nickname_taken" };
 
     const { data: byPhone } = await supabaseAdmin
       .from("profiles")
@@ -100,7 +95,11 @@ export const registerAccount = createServerFn({ method: "POST" })
         email: data.email,
         password: data.password,
         email_confirm: false,
-        user_metadata: { nickname: data.nickname, phone: data.phone },
+        user_metadata: {
+          first_name: data.firstName,
+          last_name: data.lastName,
+          phone: data.phone,
+        },
       });
       if (error || !created.user) {
         console.error("[registerAccount] createUser failed", error);
@@ -111,18 +110,15 @@ export const registerAccount = createServerFn({ method: "POST" })
 
       const { error: profileError } = await supabaseAdmin.from("profiles").insert({
         id: userId,
-        first_name: data.nickname,
-        last_name: "",
-        nickname: data.nickname,
+        first_name: data.firstName,
+        last_name: data.lastName,
+        nickname: null,
         email: data.email,
         phone: data.phone,
       });
       if (profileError) {
         console.error("[registerAccount] profile insert failed", profileError);
         await supabaseAdmin.auth.admin.deleteUser(userId);
-        if (/nickname/i.test(profileError.message)) {
-          return { ok: false as const, error: "nickname_taken" as const };
-        }
         if (/phone/i.test(profileError.message)) {
           return { ok: false as const, error: "phone_taken" as const };
         }
@@ -135,13 +131,17 @@ export const registerAccount = createServerFn({ method: "POST" })
       // Unfinished registration for the same e-mail — refresh it.
       await supabaseAdmin.auth.admin.updateUserById(userId, {
         password: data.password,
-        user_metadata: { nickname: data.nickname, phone: data.phone },
+        user_metadata: {
+          first_name: data.firstName,
+          last_name: data.lastName,
+          phone: data.phone,
+        },
       });
       await supabaseAdmin
         .from("profiles")
         .update({
-          first_name: data.nickname,
-          nickname: data.nickname,
+          first_name: data.firstName,
+          last_name: data.lastName,
           phone: data.phone,
         })
         .eq("id", userId);
@@ -153,7 +153,7 @@ export const registerAccount = createServerFn({ method: "POST" })
         userId,
         email: data.email,
         phone: data.phone,
-        name: data.nickname,
+        name: data.firstName,
         purpose: "registration",
       });
     } catch (error) {
@@ -220,7 +220,7 @@ export const resendRegistrationCode = createServerFn({ method: "POST" })
         userId: profile.id,
         email: data.email,
         phone: profile.phone,
-        name: profile.nickname ?? "",
+        name: profile.first_name ?? "",
         purpose: "registration",
         resend: true,
       });
@@ -245,7 +245,7 @@ export const requestPasswordReset = createServerFn({ method: "POST" })
         userId: profile.id,
         email: data.email,
         phone: profile.phone,
-        name: profile.nickname ?? "",
+        name: profile.first_name ?? "",
         purpose: "password_reset",
       });
     } catch (error) {
