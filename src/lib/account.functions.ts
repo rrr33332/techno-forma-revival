@@ -11,14 +11,14 @@ export const getMyAccount = createServerFn({ method: "GET" })
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("id, first_name, last_name, phone, phone_verified")
+      .select("id, first_name, last_name, phone, phone_verified, email")
       .eq("id", userId)
       .maybeSingle();
 
     const { data: orders } = await supabase
       .from("orders")
       .select(
-        "id, order_no, status, total, created_at, np_city, np_warehouse, np_warehouse_address, delivery, comment",
+        "id, order_no, status, total, discount, created_at, np_city, np_warehouse, np_warehouse_address, delivery, comment, tracking_number, salesdrive_order_id",
       )
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
@@ -28,7 +28,7 @@ export const getMyAccount = createServerFn({ method: "GET" })
     const { data: items } = ids.length
       ? await supabase
           .from("order_items")
-          .select("order_id, product_name, variant_label, unit_price, quantity")
+          .select("order_id, product_sku, product_name, variant_label, unit_price, quantity")
           .in("order_id", ids)
       : { data: [] as never[] };
 
