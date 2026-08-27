@@ -24,6 +24,7 @@ import { Route as UkAuthRouteImport } from './routes/uk.auth'
 import { Route as UkCartRouteImport } from './routes/uk.cart'
 import { Route as UkSearchRouteImport } from './routes/uk.search'
 import { Route as UkPSlugRouteImport } from './routes/uk.p.$slug'
+import { Route as ApiPublicSalesdriveWebhookRouteImport } from './routes/api/public/salesdrive.webhook'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -100,6 +101,12 @@ const UkPSlugRoute = UkPSlugRouteImport.update({
   path: '/uk/p/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicSalesdriveWebhookRoute =
+  ApiPublicSalesdriveWebhookRouteImport.update({
+    id: '/api/public/salesdrive/webhook',
+    path: '/api/public/salesdrive/webhook',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/uk/search': typeof UkSearchRoute
   '/uk/': typeof UkIndexRoute
   '/uk/p/$slug': typeof UkPSlugRoute
+  '/api/public/salesdrive/webhook': typeof ApiPublicSalesdriveWebhookRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -134,6 +142,7 @@ export interface FileRoutesByTo {
   '/uk/search': typeof UkSearchRoute
   '/uk': typeof UkIndexRoute
   '/uk/p/$slug': typeof UkPSlugRoute
+  '/api/public/salesdrive/webhook': typeof ApiPublicSalesdriveWebhookRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -152,6 +161,7 @@ export interface FileRoutesById {
   '/uk/search': typeof UkSearchRoute
   '/uk/': typeof UkIndexRoute
   '/uk/p/$slug': typeof UkPSlugRoute
+  '/api/public/salesdrive/webhook': typeof ApiPublicSalesdriveWebhookRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -171,6 +181,7 @@ export interface FileRouteTypes {
     | '/uk/search'
     | '/uk/'
     | '/uk/p/$slug'
+    | '/api/public/salesdrive/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -188,6 +199,7 @@ export interface FileRouteTypes {
     | '/uk/search'
     | '/uk'
     | '/uk/p/$slug'
+    | '/api/public/salesdrive/webhook'
   id:
     | '__root__'
     | '/'
@@ -205,6 +217,7 @@ export interface FileRouteTypes {
     | '/uk/search'
     | '/uk/'
     | '/uk/p/$slug'
+    | '/api/public/salesdrive/webhook'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -223,6 +236,7 @@ export interface RootRouteChildren {
   UkSearchRoute: typeof UkSearchRoute
   UkIndexRoute: typeof UkIndexRoute
   UkPSlugRoute: typeof UkPSlugRoute
+  ApiPublicSalesdriveWebhookRoute: typeof ApiPublicSalesdriveWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -332,6 +346,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UkPSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/salesdrive/webhook': {
+      id: '/api/public/salesdrive/webhook'
+      path: '/api/public/salesdrive/webhook'
+      fullPath: '/api/public/salesdrive/webhook'
+      preLoaderRoute: typeof ApiPublicSalesdriveWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -351,6 +372,7 @@ const rootRouteChildren: RootRouteChildren = {
   UkSearchRoute: UkSearchRoute,
   UkIndexRoute: UkIndexRoute,
   UkPSlugRoute: UkPSlugRoute,
+  ApiPublicSalesdriveWebhookRoute: ApiPublicSalesdriveWebhookRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

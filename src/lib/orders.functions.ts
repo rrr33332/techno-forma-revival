@@ -34,7 +34,7 @@ export const placeOrder = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => orderSchema.parse(data))
   .handler(async ({ data, context }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { SalesDriveService } = await import("./salesdrive.server");
+    const { syncOrderToSalesDrive } = await import("./salesdrive.server");
 
     const { data: profile } = await context.supabase
       .from("profiles")
@@ -46,6 +46,28 @@ export const placeOrder = createServerFn({ method: "POST" })
 
     const total = data.items.reduce((n, i) => n + i.price * i.qty, 0);
     const np = data.delivery === "novaposhta" ? (data.np ?? null) : null;
+
+    // Double-submit guard: an identical order created moments ago is reused
+    // instead of being duplicated (double click, page refresh, retry).
+    const since = new Date(Date.now() - 3 * 60_000).toISOString();
+    const { data: recent } = await supabaseAdmin
+      .from("orders")
+      .select("id, order_no")
+      .eq("user_id", context.userId)
+      .eq("total", total)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (recent) {
+      try {
+        await syncOrderToSalesDrive(supabaseAdmin, recent.id);
+      } catch (e) {
+        console.error("[SalesDrive] resync failed", e);
+      }
+      return { ok: true as const, orderNo: recent.order_no };
+    }
 
     const { data: order, error } = await supabaseAdmin
       .from("orders")
@@ -83,27 +105,9 @@ export const placeOrder = createServerFn({ method: "POST" })
 
     if (itemsError) throw new Error("order_items_failed");
 
-    // CRM adapter is a stub until credentials exist; a failure never breaks checkout.
+    // CRM push is idempotent (externalId) and never breaks checkout.
     try {
-      await SalesDriveService.sendOrder({
-        orderNo: order.order_no,
-        userId: context.userId,
-        firstName: profile.first_name,
-        lastName: profile.last_name,
-        phone: profile.phone ?? "",
-        comment: data.comment || null,
-        total,
-        city: np?.city || data.city || null,
-        warehouse: np?.warehouse || null,
-        warehouseAddress: np?.warehouseAddress || null,
-        items: data.items.map((i) => ({
-          sku: i.sku ?? null,
-          name: i.name,
-          variant: i.variant,
-          price: i.price,
-          qty: i.qty,
-        })),
-      });
+      await syncOrderToSalesDrive(supabaseAdmin, order.id);
     } catch (e) {
       console.error("[SalesDrive] send failed", e);
     }

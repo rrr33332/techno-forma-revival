@@ -41,3 +41,8 @@ export async function signInWithEmail(email: string, password: string) {
 export async function signOut() {
   await supabase.auth.signOut();
 }
+
+/** Adopts a session issued by the server (used by phone/e-mail sign-in). */
+export async function applyServerSession(accessToken: string, refreshToken: string) {
+  return supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+}
