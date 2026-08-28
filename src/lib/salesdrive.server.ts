@@ -259,7 +259,7 @@ export async function syncOrderToSalesDrive(
   const { data: order } = await admin
     .from("orders")
     .select(
-      "id, order_no, customer_name, phone, email, comment, total, delivery, city, np_city, np_warehouse, np_warehouse_address, user_id, salesdrive_order_id",
+      "id, order_no, customer_name, phone, email, comment, total, delivery, city, np_city, np_warehouse, np_warehouse_address, np_warehouse_data, user_id, salesdrive_order_id",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -276,6 +276,14 @@ export async function syncOrderToSalesDrive(
 
   const [firstName, ...rest] = (order.customer_name ?? "").trim().split(/\s+/);
 
+  // The picker stores the raw Nova Poshta point, which carries the refs the CRM
+  // needs to resolve the exact branch.
+  const point = (order.np_warehouse_data ?? null) as Record<string, unknown> | null;
+  const npStr = (k: string) => {
+    const v = point?.[k];
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  };
+
   try {
     const result = await SalesDriveService.sendOrder({
       orderNo: Number(order.order_no),
@@ -289,7 +297,11 @@ export async function syncOrderToSalesDrive(
       delivery: order.delivery ?? "novaposhta",
       city: order.np_city ?? order.city ?? null,
       warehouse: order.np_warehouse ?? null,
-      warehouseAddress: order.np_warehouse_address ?? null,
+      warehouseAddress: order.np_warehouse_address ?? npStr("description"),
+      cityFullName: order.np_city ?? null,
+      warehouseRef: npStr("ref"),
+      cityRef: npStr("cityRef"),
+
       items: (items ?? []).map((i) => ({
         sku: i.product_sku ?? null,
         name: i.product_name,
