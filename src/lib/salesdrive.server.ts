@@ -382,13 +382,18 @@ export async function refreshOrderStatuses(
     try {
       const remote = await SalesDriveService.getOrder(Number(row.salesdrive_order_id));
       if (!remote) continue;
-      const patch: Record<string, unknown> = {
+      const patch: {
+        salesdrive_status_id: number | null;
+        salesdrive_synced_at: string;
+        status?: string;
+        tracking_number?: string;
+      } = {
         salesdrive_status_id: remote.statusId,
         salesdrive_synced_at: new Date().toISOString(),
       };
-      if (remote.status && remote.status !== row.status) patch["status"] = remote.status;
+      if (remote.status && remote.status !== row.status) patch.status = remote.status;
       if (remote.trackingNumber && remote.trackingNumber !== row.tracking_number)
-        patch["tracking_number"] = remote.trackingNumber;
+        patch.tracking_number = remote.trackingNumber;
       if (Object.keys(patch).length <= 2) continue;
       await admin.from("orders").update(patch).eq("id", row.id);
       updated++;
