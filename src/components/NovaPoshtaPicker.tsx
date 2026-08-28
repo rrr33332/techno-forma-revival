@@ -11,6 +11,9 @@ export type NpSelection = {
   warehouse: string;
   warehouseAddress: string;
   point: NpPoint | null;
+  /** Plain settlement name ("м. Харків") and its Nova Poshta ref. */
+  cityName?: string;
+  cityRef?: string;
 };
 
 const POPULAR = ["Київ", "Харків", "Одеса", "Дніпро", "Львів", "Запоріжжя"];
@@ -107,6 +110,8 @@ export function NovaPoshtaPicker({
         warehouse: "",
         warehouseAddress: "",
         point: null,
+        cityName: next.name,
+        cityRef: next.ref,
       });
 
       const req = ++pointReq.current;
@@ -410,6 +415,8 @@ export function NovaPoshtaPicker({
                             warehouse: p.name,
                             warehouseAddress: p.address,
                             point: p,
+                            cityName: city.name,
+                            cityRef: city.ref,
                           });
                         }}
                         className={`flex w-full items-start gap-2.5 px-3 py-3 text-left transition-colors ${
