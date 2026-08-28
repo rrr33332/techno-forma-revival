@@ -134,9 +134,15 @@ export const SalesDriveService = {
     const shipping =
       SHIPPING[(order.delivery ?? "novaposhta") as keyof typeof SHIPPING] ?? SHIPPING.novaposhta;
 
-    const address = [order.city, order.warehouse, order.warehouseAddress]
-      .filter(Boolean)
-      .join(", ");
+    const deliveryText = describeDelivery(order);
+
+    // The manager must always see where to ship, even if a CRM field mapping
+    // changes: the delivery block is duplicated into the order comment.
+    const commentParts = [
+      order.comment,
+      deliveryText,
+      ...order.items.filter((i) => i.variant).map((i) => `${i.name}: ${i.variant}`),
+    ].filter(Boolean);
 
     const payload: Record<string, unknown> = {
       form: key,
@@ -145,9 +151,7 @@ export const SalesDriveService = {
       fName: order.firstName || "Клиент",
       lName: order.lastName || "",
       phone: order.phone,
-      comment: [order.comment, ...order.items.filter((i) => i.variant).map((i) => `${i.name}: ${i.variant}`)]
-        .filter(Boolean)
-        .join("\n") || "",
+      comment: commentParts.join("\n"),
       shipping_method: shipping,
       payment_method: PAYMENT_COD,
       products: order.items.map((i) => ({
@@ -158,19 +162,38 @@ export const SalesDriveService = {
       })),
     };
     if (order.email) payload["email"] = order.email;
-    if (address) payload["adresDostavki"] = address;
-    if (order.delivery === "novaposhta" && order.city) {
-      const branch = order.warehouse?.match(/\d+/)?.[0];
+
+    if (order.delivery === "novaposhta") {
+      // "Відділення №5: вул. Героїв, 1" — the exact string NP/SalesDrive expects.
+      const warehouseLine = [order.warehouse, order.warehouseAddress]
+        .filter(Boolean)
+        .join(": ");
+      const full = [order.city, warehouseLine].filter(Boolean).join(", ");
+      payload["adresDostavki"] = full;
+      payload["shipping_address"] = full;
       payload["ord_delivery_data"] = [
         {
           provider: "novaposhta",
-          type: "WarehouseWarehouse",
-          cityName: order.city,
-          address: order.warehouse ?? "",
-          ...(branch ? { branchNumber: Number(branch) } : {}),
+          type: order.warehouse?.toLowerCase().includes("поштомат")
+            ? "WarehousePostomat"
+            : "WarehouseWarehouse",
+          cityName: order.city ?? "",
+          cityFullName: order.cityFullName ?? order.city ?? "",
+          ...(order.areaName ? { areaName: order.areaName } : {}),
+          ...(order.regionName ? { regionName: order.regionName } : {}),
+          address: warehouseLine || (order.warehouse ?? ""),
+          ...(order.warehouseRef ? { recipientWarehouse: order.warehouseRef } : {}),
+          ...(order.cityRef ? { recipientCityRef: order.cityRef } : {}),
+          payForDelivery: "1",
+          backDelivery: "0",
         },
       ];
+    } else {
+      const full = deliveryText.replace(/^Доставка:\s*/, "");
+      payload["adresDostavki"] = full;
+      payload["shipping_address"] = full;
     }
+
 
     const res = await fetch(`${url}/handler/`, {
       method: "POST",
