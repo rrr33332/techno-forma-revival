@@ -38,12 +38,35 @@ export type SalesDriveOrder = {
   city: string | null;
   warehouse: string | null;
   warehouseAddress: string | null;
+  /** Extra Nova Poshta directory data, when the picker provided it. */
+  cityFullName?: string | null;
+  areaName?: string | null;
+  regionName?: string | null;
+  cityRef?: string | null;
+  warehouseRef?: string | null;
   items: SalesDriveItem[];
 };
+
+const DELIVERY_LABEL: Record<string, string> = {
+  novaposhta: "Нова Пошта, відділення",
+  pickup: "Самовивіз",
+  carrier: "Перевізник",
+};
+
+/** Human-readable delivery block duplicated into the CRM comment. */
+export function describeDelivery(order: SalesDriveOrder): string {
+  const method = DELIVERY_LABEL[order.delivery ?? "novaposhta"] ?? String(order.delivery ?? "");
+  const lines = [`Доставка: ${method}`];
+  if (order.city) lines.push(`Місто: ${order.city}`);
+  if (order.warehouse) lines.push(`Відділення: ${order.warehouse}`);
+  if (order.warehouseAddress) lines.push(`Адреса: ${order.warehouseAddress}`);
+  return lines.join("\n");
+}
 
 export type SalesDriveResult =
   | { sent: true; orderId: number; adopted: boolean }
   | { sent: false; reason: string };
+
 
 /** Known SalesDrive dictionary ids — do not invent new ones. */
 const SHIPPING = { novaposhta: "id_9", pickup: "id_10", carrier: "id_9" } as const;
