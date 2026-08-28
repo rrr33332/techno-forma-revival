@@ -351,3 +351,50 @@ export async function syncOrderToSalesDrive(
     return { ok: false, reason };
   }
 }
+
+/**
+ * Pull-based status refresh (belt and braces next to the webhook).
+ *
+ * The CRM stays the source of truth: only the SalesDrive id is taken from our
+ * database, everything else is re-read from the API, so nothing a client sends
+ * can influence the stored status.
+ */
+export async function refreshOrderStatuses(
+  admin: AdminClient,
+  userId: string,
+  limit = 10,
+): Promise<number> {
+  if (!SalesDriveService.isEnabled()) return 0;
+
+  const { data: rows } = await admin
+    .from("orders")
+    .select("id, salesdrive_order_id, status, tracking_number")
+    .eq("user_id", userId)
+    .not("salesdrive_order_id", "is", null)
+    .not("status", "in", "(done,cancelled,returned,deleted)")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!rows?.length) return 0;
+
+  let updated = 0;
+  for (const row of rows) {
+    try {
+      const remote = await SalesDriveService.getOrder(Number(row.salesdrive_order_id));
+      if (!remote) continue;
+      const patch: Record<string, unknown> = {
+        salesdrive_status_id: remote.statusId,
+        salesdrive_synced_at: new Date().toISOString(),
+      };
+      if (remote.status && remote.status !== row.status) patch["status"] = remote.status;
+      if (remote.trackingNumber && remote.trackingNumber !== row.tracking_number)
+        patch["tracking_number"] = remote.trackingNumber;
+      if (Object.keys(patch).length <= 2) continue;
+      await admin.from("orders").update(patch).eq("id", row.id);
+      updated++;
+    } catch (e) {
+      console.error("[SalesDrive] status refresh failed", e);
+    }
+  }
+  return updated;
+}
