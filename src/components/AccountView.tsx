@@ -4,7 +4,13 @@ import { useServerFn } from "@tanstack/react-start";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, LogOut, Package, User } from "lucide-react";
 import { changeMyPassword, getMyAccount, updateMyProfile } from "@/lib/account.functions";
-import { orderStatusLabel, orderStatusTone } from "@/lib/order-status";
+import {
+  ORDER_PROGRESS,
+  isTerminalFailure,
+  orderProgressIndex,
+  orderStatusLabel,
+  orderStatusTone,
+} from "@/lib/order-status";
 import { formatPhone } from "@/lib/phone";
 import { signOut } from "@/lib/use-auth";
 import { fmtPrice } from "@/lib/i18n";
@@ -30,6 +36,7 @@ const TXT = {
   total: { ru: "Сумма", uk: "Сума" },
   delivery: { ru: "Доставка", uk: "Доставка" },
   uah: { ru: "грн", uk: "грн" },
+  ttn: { ru: "ТТН", uk: "ТТН" },
 } as const;
 
 const input =
@@ -230,6 +237,20 @@ export function AccountView({ lang }: { lang: Lang }) {
                       </li>
                     ))}
                   </ul>
+                  <OrderProgress status={o.status} lang={lang} />
+                  {o.tracking_number && (
+                    <p className="mt-3 text-xs">
+                      <span className="text-muted-foreground">{T("ttn")}: </span>
+                      <a
+                        href={`https://novaposhta.ua/tracking/?cargo_number=${o.tracking_number}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold underline underline-offset-2"
+                      >
+                        {o.tracking_number}
+                      </a>
+                    </p>
+                  )}
                   {(o.np_city || o.np_warehouse) && (
                     <p className="mt-3 break-words text-xs text-muted-foreground">
                       {T("delivery")}: {[o.np_city, o.np_warehouse, o.np_warehouse_address]
@@ -247,5 +268,38 @@ export function AccountView({ lang }: { lang: Lang }) {
         </section>
       </div>
     </div>
+  );
+}
+
+/** Linear order pipeline; terminal failures collapse to a single notice. */
+function OrderProgress({ status, lang }: { status: string; lang: Lang }) {
+  if (isTerminalFailure(status))
+    return (
+      <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">
+        {orderStatusLabel(status, lang)}
+      </p>
+    );
+
+  const current = orderProgressIndex(status);
+  if (current < 0) return null;
+
+  return (
+    <ol className="mt-4 flex gap-1" aria-label={orderStatusLabel(status, lang)}>
+      {ORDER_PROGRESS.map((step, i) => (
+        <li key={step} className="min-w-0 flex-1">
+          <div
+            className={`h-1.5 rounded-full ${i <= current ? "bg-accent" : "bg-muted"}`}
+            aria-hidden
+          />
+          <span
+            className={`mt-1 block truncate text-[10px] leading-tight ${
+              i === current ? "font-semibold text-foreground" : "text-muted-foreground"
+            }`}
+          >
+            {orderStatusLabel(step, lang)}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }

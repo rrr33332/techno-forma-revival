@@ -38,12 +38,35 @@ export type SalesDriveOrder = {
   city: string | null;
   warehouse: string | null;
   warehouseAddress: string | null;
+  /** Extra Nova Poshta directory data, when the picker provided it. */
+  cityFullName?: string | null;
+  areaName?: string | null;
+  regionName?: string | null;
+  cityRef?: string | null;
+  warehouseRef?: string | null;
   items: SalesDriveItem[];
 };
+
+const DELIVERY_LABEL: Record<string, string> = {
+  novaposhta: "Нова Пошта, відділення",
+  pickup: "Самовивіз",
+  carrier: "Перевізник",
+};
+
+/** Human-readable delivery block duplicated into the CRM comment. */
+export function describeDelivery(order: SalesDriveOrder): string {
+  const method = DELIVERY_LABEL[order.delivery ?? "novaposhta"] ?? String(order.delivery ?? "");
+  const lines = [`Доставка: ${method}`];
+  if (order.city) lines.push(`Місто: ${order.city}`);
+  if (order.warehouse) lines.push(`Відділення: ${order.warehouse}`);
+  if (order.warehouseAddress) lines.push(`Адреса: ${order.warehouseAddress}`);
+  return lines.join("\n");
+}
 
 export type SalesDriveResult =
   | { sent: true; orderId: number; adopted: boolean }
   | { sent: false; reason: string };
+
 
 /** Known SalesDrive dictionary ids — do not invent new ones. */
 const SHIPPING = { novaposhta: "id_9", pickup: "id_10", carrier: "id_9" } as const;
@@ -134,9 +157,15 @@ export const SalesDriveService = {
     const shipping =
       SHIPPING[(order.delivery ?? "novaposhta") as keyof typeof SHIPPING] ?? SHIPPING.novaposhta;
 
-    const address = [order.city, order.warehouse, order.warehouseAddress]
-      .filter(Boolean)
-      .join(", ");
+    const deliveryText = describeDelivery(order);
+
+    // The manager must always see where to ship, even if a CRM field mapping
+    // changes: the delivery block is duplicated into the order comment.
+    const commentParts = [
+      order.comment,
+      deliveryText,
+      ...order.items.filter((i) => i.variant).map((i) => `${i.name}: ${i.variant}`),
+    ].filter(Boolean);
 
     const payload: Record<string, unknown> = {
       form: key,
@@ -145,9 +174,7 @@ export const SalesDriveService = {
       fName: order.firstName || "Клиент",
       lName: order.lastName || "",
       phone: order.phone,
-      comment: [order.comment, ...order.items.filter((i) => i.variant).map((i) => `${i.name}: ${i.variant}`)]
-        .filter(Boolean)
-        .join("\n") || "",
+      comment: commentParts.join("\n"),
       shipping_method: shipping,
       payment_method: PAYMENT_COD,
       products: order.items.map((i) => ({
@@ -158,19 +185,38 @@ export const SalesDriveService = {
       })),
     };
     if (order.email) payload["email"] = order.email;
-    if (address) payload["adresDostavki"] = address;
-    if (order.delivery === "novaposhta" && order.city) {
-      const branch = order.warehouse?.match(/\d+/)?.[0];
+
+    if (order.delivery === "novaposhta") {
+      // "Відділення №5: вул. Героїв, 1" — the exact string NP/SalesDrive expects.
+      const warehouseLine = [order.warehouse, order.warehouseAddress]
+        .filter(Boolean)
+        .join(": ");
+      const full = [order.city, warehouseLine].filter(Boolean).join(", ");
+      payload["adresDostavki"] = full;
+      payload["shipping_address"] = full;
       payload["ord_delivery_data"] = [
         {
           provider: "novaposhta",
-          type: "WarehouseWarehouse",
-          cityName: order.city,
-          address: order.warehouse ?? "",
-          ...(branch ? { branchNumber: Number(branch) } : {}),
+          type: order.warehouse?.toLowerCase().includes("поштомат")
+            ? "WarehousePostomat"
+            : "WarehouseWarehouse",
+          cityName: order.city ?? "",
+          cityFullName: order.cityFullName ?? order.city ?? "",
+          ...(order.areaName ? { areaName: order.areaName } : {}),
+          ...(order.regionName ? { regionName: order.regionName } : {}),
+          address: warehouseLine || (order.warehouse ?? ""),
+          ...(order.warehouseRef ? { recipientWarehouse: order.warehouseRef } : {}),
+          ...(order.cityRef ? { recipientCityRef: order.cityRef } : {}),
+          payForDelivery: "1",
+          backDelivery: "0",
         },
       ];
+    } else {
+      const full = deliveryText.replace(/^Доставка:\s*/, "");
+      payload["adresDostavki"] = full;
+      payload["shipping_address"] = full;
     }
+
 
     const res = await fetch(`${url}/handler/`, {
       method: "POST",
@@ -213,7 +259,7 @@ export async function syncOrderToSalesDrive(
   const { data: order } = await admin
     .from("orders")
     .select(
-      "id, order_no, customer_name, phone, email, comment, total, delivery, city, np_city, np_warehouse, np_warehouse_address, user_id, salesdrive_order_id",
+      "id, order_no, customer_name, phone, email, comment, total, delivery, city, np_city, np_warehouse, np_warehouse_address, np_warehouse_data, user_id, salesdrive_order_id",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -230,6 +276,14 @@ export async function syncOrderToSalesDrive(
 
   const [firstName, ...rest] = (order.customer_name ?? "").trim().split(/\s+/);
 
+  // The picker stores the raw Nova Poshta point, which carries the refs the CRM
+  // needs to resolve the exact branch.
+  const point = (order.np_warehouse_data ?? null) as Record<string, unknown> | null;
+  const npStr = (k: string) => {
+    const v = point?.[k];
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  };
+
   try {
     const result = await SalesDriveService.sendOrder({
       orderNo: Number(order.order_no),
@@ -243,7 +297,11 @@ export async function syncOrderToSalesDrive(
       delivery: order.delivery ?? "novaposhta",
       city: order.np_city ?? order.city ?? null,
       warehouse: order.np_warehouse ?? null,
-      warehouseAddress: order.np_warehouse_address ?? null,
+      warehouseAddress: order.np_warehouse_address ?? npStr("description"),
+      cityFullName: order.np_city ?? null,
+      warehouseRef: npStr("ref"),
+      cityRef: npStr("cityRef"),
+
       items: (items ?? []).map((i) => ({
         sku: i.product_sku ?? null,
         name: i.product_name,
@@ -292,4 +350,56 @@ export async function syncOrderToSalesDrive(
       .eq("id", orderId);
     return { ok: false, reason };
   }
+}
+
+/**
+ * Pull-based status refresh (belt and braces next to the webhook).
+ *
+ * The CRM stays the source of truth: only the SalesDrive id is taken from our
+ * database, everything else is re-read from the API, so nothing a client sends
+ * can influence the stored status.
+ */
+export async function refreshOrderStatuses(
+  admin: AdminClient,
+  userId: string,
+  limit = 10,
+): Promise<number> {
+  if (!SalesDriveService.isEnabled()) return 0;
+
+  const { data: rows } = await admin
+    .from("orders")
+    .select("id, salesdrive_order_id, status, tracking_number")
+    .eq("user_id", userId)
+    .not("salesdrive_order_id", "is", null)
+    .not("status", "in", "(done,cancelled,returned,deleted)")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!rows?.length) return 0;
+
+  let updated = 0;
+  for (const row of rows) {
+    try {
+      const remote = await SalesDriveService.getOrder(Number(row.salesdrive_order_id));
+      if (!remote) continue;
+      const patch: {
+        salesdrive_status_id: number | null;
+        salesdrive_synced_at: string;
+        status?: string;
+        tracking_number?: string;
+      } = {
+        salesdrive_status_id: remote.statusId,
+        salesdrive_synced_at: new Date().toISOString(),
+      };
+      if (remote.status && remote.status !== row.status) patch.status = remote.status;
+      if (remote.trackingNumber && remote.trackingNumber !== row.tracking_number)
+        patch.tracking_number = remote.trackingNumber;
+      if (Object.keys(patch).length <= 2) continue;
+      await admin.from("orders").update(patch).eq("id", row.id);
+      updated++;
+    } catch (e) {
+      console.error("[SalesDrive] status refresh failed", e);
+    }
+  }
+  return updated;
 }

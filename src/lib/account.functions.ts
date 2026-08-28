@@ -9,6 +9,17 @@ export const getMyAccount = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { supabase, userId } = context;
 
+    // Statuses are pulled from the CRM before reading, so the customer sees the
+    // current state even when a webhook delivery was missed.
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const { refreshOrderStatuses } = await import("./salesdrive.server");
+      await refreshOrderStatuses(supabaseAdmin, userId);
+    } catch (e) {
+      console.error("[SalesDrive] account refresh failed", e);
+    }
+
+
     const { data: profile } = await supabase
       .from("profiles")
       .select("id, first_name, last_name, phone, phone_verified, email")
