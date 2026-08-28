@@ -57,10 +57,10 @@ export function CartView({ lang }: { lang: Lang }) {
           np:
             form.delivery === "novaposhta" && np
               ? {
-                  city: np.city,
+                  city: np.cityName || np.city,
                   warehouse: np.warehouse,
                   warehouseAddress: np.warehouseAddress,
-                  data: np.point ?? null,
+                  data: { ...(np.point ?? {}), cityRef: np.cityRef ?? null, cityFull: np.city },
                 }
               : null,
           items: lines.map((l) => ({
