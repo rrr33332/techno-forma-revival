@@ -377,6 +377,7 @@ export async function refreshOrderStatuses(
 
   if (!rows?.length) return 0;
 
+
   let updated = 0;
   for (const row of rows) {
     try {
