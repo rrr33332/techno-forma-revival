@@ -404,3 +404,50 @@ export async function refreshOrderStatuses(
   }
   return updated;
 }
+
+/**
+ * Admin-side status refresh: same pull logic as `refreshOrderStatuses`, but
+ * across all users' newest open orders instead of a single account.
+ */
+export async function refreshAllOrderStatuses(
+  admin: AdminClient,
+  limit = 40,
+): Promise<number> {
+  if (!SalesDriveService.isEnabled()) return 0;
+
+  const { data: rows } = await admin
+    .from("orders")
+    .select("id, salesdrive_order_id, status, tracking_number")
+    .not("salesdrive_order_id", "is", null)
+    .not("status", "in", "(done,cancelled,returned,deleted)")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!rows?.length) return 0;
+
+  let updated = 0;
+  for (const row of rows) {
+    try {
+      const remote = await SalesDriveService.getOrder(Number(row.salesdrive_order_id));
+      if (!remote) continue;
+      const patch: {
+        salesdrive_status_id: number | null;
+        salesdrive_synced_at: string;
+        status?: string;
+        tracking_number?: string;
+      } = {
+        salesdrive_status_id: remote.statusId,
+        salesdrive_synced_at: new Date().toISOString(),
+      };
+      if (remote.status && remote.status !== row.status) patch.status = remote.status;
+      if (remote.trackingNumber && remote.trackingNumber !== row.tracking_number)
+        patch.tracking_number = remote.trackingNumber;
+      if (Object.keys(patch).length <= 2) continue;
+      await admin.from("orders").update(patch).eq("id", row.id);
+      updated++;
+    } catch (e) {
+      console.error("[SalesDrive] admin status refresh failed", e);
+    }
+  }
+  return updated;
+}
