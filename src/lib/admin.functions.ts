@@ -81,9 +81,9 @@ export const adminUpdateOrder = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { requireAdmin } = await import("./admin.server");
     await requireAdmin(context);
-    const patch: Record<string, unknown> = {};
-    if (data.status) patch["status"] = data.status;
-    if (data.tracking_number !== undefined) patch["tracking_number"] = data.tracking_number;
+    const patch: OrderUpdate = {};
+    if (data.status) patch.status = data.status;
+    if (data.tracking_number !== undefined) patch.tracking_number = data.tracking_number;
     const { error } = await context.supabase.from("orders").update(patch).eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true as const };
