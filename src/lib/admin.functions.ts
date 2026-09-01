@@ -1,6 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import type { Database } from "@/integrations/supabase/types";
+
+type OrderUpdate = Database["public"]["Tables"]["orders"]["Update"];
 
 /**
  * Admin RPC surface. Every function re-checks the administrator role on the
