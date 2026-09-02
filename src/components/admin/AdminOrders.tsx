@@ -3,7 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { adminListOrders, adminRefreshOrders, adminUpdateOrder } from "@/lib/admin.functions";
-import { ORDER_STATUS_ORDER, orderStatusLabel } from "@/lib/order-status";
+import { ORDER_STATUSES, orderStatusLabel } from "@/lib/order-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -190,7 +190,7 @@ function OrderEditor({
           value={s}
           onChange={(e) => setS(e.target.value)}
         >
-          {ORDER_STATUS_ORDER.map((k) => (
+          {ORDER_STATUSES.map((k) => (
             <option key={k} value={k}>
               {orderStatusLabel(k, "ru")}
             </option>
