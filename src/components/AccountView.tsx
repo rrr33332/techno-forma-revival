@@ -60,6 +60,14 @@ export function AccountView({ lang }: { lang: Lang }) {
     queryFn: () => load({}),
   });
 
+  const checkAdmin = useServerFn(amIAdmin);
+  const adminAccess = useQuery({
+    queryKey: ["admin", "access"],
+    queryFn: () => checkAdmin(),
+    retry: false,
+  });
+
+
   const [profile, setProfile] = useState({ firstName: "", lastName: "" });
   const [profileState, setProfileState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [pw, setPw] = useState({ current: "", next: "" });
