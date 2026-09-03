@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, LogOut, Package, User } from "lucide-react";
+import { Loader2, LogOut, Package, ShieldCheck, User } from "lucide-react";
 import { changeMyPassword, getMyAccount, updateMyProfile } from "@/lib/account.functions";
+import { amIAdmin } from "@/lib/admin.functions";
+
 import {
   ORDER_PROGRESS,
   isTerminalFailure,
