@@ -39,7 +39,9 @@ const TXT = {
   delivery: { ru: "Доставка", uk: "Доставка" },
   uah: { ru: "грн", uk: "грн" },
   ttn: { ru: "ТТН", uk: "ТТН" },
+  admin: { ru: "Админ-панель", uk: "Адмін-панель" },
 } as const;
+
 
 const input =
   "w-full rounded-lg border border-input bg-background px-3 py-3 text-base outline-none focus:border-accent focus:ring-2 focus:ring-ring/25 sm:text-sm";
