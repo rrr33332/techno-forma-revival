@@ -127,14 +127,26 @@ export function AccountView({ lang }: { lang: Lang }) {
     <div className="container-page py-8 sm:py-12">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-bold">{T("title")}</h1>
-        <button
-          onClick={logout}
-          className="inline-flex items-center gap-2 rounded-sm border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted"
-        >
-          <LogOut className="size-4" aria-hidden />
-          {T("logout")}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          {adminAccess.data?.admin ? (
+            <Link
+              to="/admin"
+              className="inline-flex items-center gap-2 rounded-sm bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              <ShieldCheck className="size-4" aria-hidden />
+              {T("admin")}
+            </Link>
+          ) : null}
+          <button
+            onClick={logout}
+            className="inline-flex items-center gap-2 rounded-sm border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted"
+          >
+            <LogOut className="size-4" aria-hidden />
+            {T("logout")}
+          </button>
+        </div>
       </div>
+
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[360px_1fr]">
         <div className="space-y-6">
