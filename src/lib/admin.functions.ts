@@ -409,10 +409,12 @@ export const adminImportProducts = createServerFn({ method: "POST" })
             ...patch,
             slug: bySlug.has(slug.toLowerCase()) ? `${slug}_${line}` : slug,
             category_id: categoryId,
-            image_path: raw["image_path"] ?? "",
+            external_id: raw["external_id"] ?? null,
+            image_path: img ?? "",
             name_ru: patch["name_ru"] ?? name,
             name_uk: patch["name_uk"] ?? name,
           };
+
           const { error } = await context.supabase.from("products").insert(insert as never);
           if (error) {
             created--;
