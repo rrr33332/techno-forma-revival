@@ -8,8 +8,8 @@ import { AdminProducts, ProductForm, emptyProduct } from "./AdminProducts";
 import { AdminCategories } from "./AdminCategories";
 import { AdminImport } from "./AdminImport";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, ShieldAlert } from "lucide-react";
+import { Loader2 } from "lucide-react";
+
 
 const TABS = [
   { key: "orders", label: "📦 Заказы" },
