@@ -263,19 +263,27 @@ export const adminImportProducts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) => importSchema.parse(data))
   .handler(async ({ data, context }) => {
-    const { requireAdmin, normalizeRow, parseNumber, parseList, parseBool, slugify } =
-      await import("./admin.server");
+    const {
+      requireAdmin,
+      normalizeRow,
+      parseNumber,
+      parseList,
+      parseBool,
+      slugify,
+      normalizeImagePath,
+    } = await import("./admin.server");
     await requireAdmin(context);
 
     const { data: cats } = await context.supabase
       .from("categories")
-      .select("id, slug, name_ru, name_uk");
+      .select("id, slug, name_ru, name_uk, external_id");
     const catBy = new Map<string, string>();
     for (const c of cats ?? []) {
       catBy.set(c.slug.toLowerCase(), c.id);
       catBy.set(c.name_ru.toLowerCase(), c.id);
       catBy.set(c.name_uk.toLowerCase(), c.id);
       catBy.set(c.id, c.id);
+      if (c.external_id) catBy.set(String(c.external_id).toLowerCase(), c.id);
     }
 
     const { data: existing } = await context.supabase
@@ -290,6 +298,7 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       if (p.sku) bySku.set(String(p.sku).toLowerCase(), p.id);
       bySlug.set(p.slug.toLowerCase(), p.id);
     }
+
 
     type PlanRow = {
       line: number;
