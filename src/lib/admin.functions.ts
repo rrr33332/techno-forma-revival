@@ -358,17 +358,23 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       put("description_ru", raw["description_ru"]);
       put("description_uk", raw["description_uk"]);
       put("sku", raw["sku"]);
-      put("external_id", raw["external_id"]);
       put("price", parseNumber(raw["price"]));
       put("old_price", parseNumber(raw["old_price"]));
       put("special_price", parseNumber(raw["special_price"]));
+      put("manufacturer", raw["manufacturer"]);
+      put("brand", raw["brand"]);
       const qty = parseNumber(raw["quantity"]);
       if (qty !== null) {
         patch["quantity"] = Math.max(0, Math.round(qty));
         patch["in_stock"] = qty > 0;
       }
-      if (raw["image_path"]) patch["image_path"] = raw["image_path"];
-      if (raw["gallery"]) patch["gallery"] = parseList(raw["gallery"]);
+      const img = normalizeImagePath(raw["image_path"]);
+      if (img) patch["image_path"] = img;
+      const gallery = parseList(raw["gallery"])
+        .map((g) => normalizeImagePath(g))
+        .filter((g): g is string => Boolean(g));
+      if (gallery.length) patch["gallery"] = gallery;
+
       if (raw["specs_ru"]) patch["specs_ru"] = parseList(raw["specs_ru"]);
       if (raw["specs_uk"]) patch["specs_uk"] = parseList(raw["specs_uk"]);
       put("meta_title_ru", raw["meta_title_ru"]);
