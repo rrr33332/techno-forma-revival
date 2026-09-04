@@ -331,14 +331,23 @@ export const adminImportProducts = createServerFn({ method: "POST" })
         (raw["seo_url"] && bySlug.get(raw["seo_url"].toLowerCase())) ||
         null;
 
-      const catKey = (raw["category"] ?? "").toLowerCase();
-      const categoryId = catKey ? (catBy.get(catKey) ?? null) : null;
+      let categoryId: string | null = null;
+      for (const part of (raw["category"] ?? "").split(/[,;|]/)) {
+        const k = part.trim().toLowerCase();
+        if (!k) continue;
+        const hit = catBy.get(k);
+        if (hit) {
+          categoryId = hit;
+          break;
+        }
+      }
 
       if (!matchId && !categoryId) {
         skipped++;
         plan.push({ line, key, name, action: "skip", reason: "категория не найдена" });
         continue;
       }
+
 
       const patch: Record<string, unknown> = {};
       const put = (k: string, v: unknown) => {
