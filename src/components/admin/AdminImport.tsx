@@ -182,7 +182,14 @@ export function AdminImport() {
             >
               Применить импорт
             </Button>
+            {preview.isPending ? (
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                {progress} / {rows.length}
+              </span>
+            ) : null}
           </div>
+
         </CardContent>
       </Card>
 
