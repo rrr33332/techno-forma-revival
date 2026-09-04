@@ -39,16 +39,34 @@ const LABEL: Record<PlanRow["action"], string> = {
   error: "ошибка",
 };
 
+const CHUNK = 100;
+
 export function AdminImport() {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [fileName, setFileName] = useState("");
   const [plan, setPlan] = useState<Plan | null>(null);
   const [parsing, setParsing] = useState(false);
+  const [progress, setProgress] = useState(0);
   const run = useServerFn(adminImportProducts);
   const qc = useQueryClient();
 
   const preview = useMutation({
-    mutationFn: (apply: boolean) => run({ data: { rows, apply } }) as Promise<Plan>,
+    // Large catalogs are sent in chunks: one 14 MB request would exceed request limits.
+    mutationFn: async (apply: boolean) => {
+      const total: Plan = { applied: apply, toCreate: 0, toUpdate: 0, skipped: 0, errors: 0, rows: [] };
+      setProgress(0);
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const slice = rows.slice(i, i + CHUNK);
+        const r = (await run({ data: { rows: slice, apply } })) as Plan;
+        total.toCreate += r.toCreate;
+        total.toUpdate += r.toUpdate;
+        total.skipped += r.skipped;
+        total.errors += r.errors;
+        total.rows.push(...r.rows.map((x) => ({ ...x, line: x.line + i })));
+        setProgress(Math.min(i + CHUNK, rows.length));
+      }
+      return total;
+    },
     onSuccess: (r) => {
       setPlan(r);
       if (r.applied) {
@@ -58,6 +76,7 @@ export function AdminImport() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
 
   async function onFile(file: File) {
     setParsing(true);
