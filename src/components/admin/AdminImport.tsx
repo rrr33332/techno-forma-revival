@@ -66,14 +66,52 @@ export function AdminImport() {
       const XLSX = await import("xlsx");
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const sheetName = wb.SheetNames[0];
-      if (!sheetName) throw new Error("Пустой файл");
-      const sheet = wb.Sheets[sheetName]!;
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      const sheet = (name: string) => {
+        const ws = wb.Sheets[name];
+        return ws ? XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" }) : [];
+      };
+
+      const mainName = wb.SheetNames.includes("Products") ? "Products" : wb.SheetNames[0];
+      if (!mainName) throw new Error("Пустой файл");
+      const json = sheet(mainName);
       if (!json.length) throw new Error("В файле нет строк");
-      setRows(json.slice(0, 5000));
+
+      // OpenCart-style export: enrich product rows from the companion sheets.
+      const galleries = new Map<string, string[]>();
+      for (const r of sheet("AdditionalImages")) {
+        const id = String(r["product_id"] ?? "").trim();
+        const img = String(r["image"] ?? "").trim();
+        if (!id || !img) continue;
+        galleries.set(id, [...(galleries.get(id) ?? []), img]);
+      }
+      const slugs = new Map<string, string>();
+      for (const r of sheet("ProductSEOKeywords")) {
+        const id = String(r["product_id"] ?? "").trim();
+        const kw = String(r["keyword(ru-ru)"] ?? r["keyword(uk-ua)"] ?? "").trim();
+        if (id && kw && !slugs.has(id)) slugs.set(id, kw);
+      }
+      const specials = new Map<string, string>();
+      for (const r of sheet("Specials")) {
+        const id = String(r["product_id"] ?? "").trim();
+        const price = String(r["price"] ?? "").trim();
+        if (id && price && !specials.has(id)) specials.set(id, price);
+      }
+
+      const merged = json.map((r) => {
+        const id = String(r["product_id"] ?? "").trim();
+        const out: Record<string, unknown> = { ...r };
+        const g = galleries.get(id);
+        if (g?.length) out["gallery"] = g.join("\n");
+        const s = slugs.get(id);
+        if (s) out["seo_url"] = s;
+        const sp = specials.get(id);
+        if (sp) out["special_price"] = sp;
+        return out;
+      });
+
+      setRows(merged.slice(0, 5000));
       setFileName(file.name);
-      toast.success(`Прочитано строк: ${json.length}`);
+      toast.success(`Прочитано строк: ${merged.length}`);
     } catch (e) {
       toast.error((e as Error).message);
       setRows([]);
@@ -82,6 +120,7 @@ export function AdminImport() {
       setParsing(false);
     }
   }
+
 
   return (
     <div className="space-y-4">
