@@ -39,16 +39,34 @@ const LABEL: Record<PlanRow["action"], string> = {
   error: "ошибка",
 };
 
+const CHUNK = 100;
+
 export function AdminImport() {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [fileName, setFileName] = useState("");
   const [plan, setPlan] = useState<Plan | null>(null);
   const [parsing, setParsing] = useState(false);
+  const [progress, setProgress] = useState(0);
   const run = useServerFn(adminImportProducts);
   const qc = useQueryClient();
 
   const preview = useMutation({
-    mutationFn: (apply: boolean) => run({ data: { rows, apply } }) as Promise<Plan>,
+    // Large catalogs are sent in chunks: one 14 MB request would exceed request limits.
+    mutationFn: async (apply: boolean) => {
+      const total: Plan = { applied: apply, toCreate: 0, toUpdate: 0, skipped: 0, errors: 0, rows: [] };
+      setProgress(0);
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const slice = rows.slice(i, i + CHUNK);
+        const r = (await run({ data: { rows: slice, apply } })) as Plan;
+        total.toCreate += r.toCreate;
+        total.toUpdate += r.toUpdate;
+        total.skipped += r.skipped;
+        total.errors += r.errors;
+        total.rows.push(...r.rows.map((x) => ({ ...x, line: x.line + i })));
+        setProgress(Math.min(i + CHUNK, rows.length));
+      }
+      return total;
+    },
     onSuccess: (r) => {
       setPlan(r);
       if (r.applied) {
@@ -59,6 +77,7 @@ export function AdminImport() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+
   async function onFile(file: File) {
     setParsing(true);
     setPlan(null);
@@ -66,14 +85,52 @@ export function AdminImport() {
       const XLSX = await import("xlsx");
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const sheetName = wb.SheetNames[0];
-      if (!sheetName) throw new Error("Пустой файл");
-      const sheet = wb.Sheets[sheetName]!;
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      const sheet = (name: string) => {
+        const ws = wb.Sheets[name];
+        return ws ? XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" }) : [];
+      };
+
+      const mainName = wb.SheetNames.includes("Products") ? "Products" : wb.SheetNames[0];
+      if (!mainName) throw new Error("Пустой файл");
+      const json = sheet(mainName);
       if (!json.length) throw new Error("В файле нет строк");
-      setRows(json.slice(0, 5000));
+
+      // OpenCart-style export: enrich product rows from the companion sheets.
+      const galleries = new Map<string, string[]>();
+      for (const r of sheet("AdditionalImages")) {
+        const id = String(r["product_id"] ?? "").trim();
+        const img = String(r["image"] ?? "").trim();
+        if (!id || !img) continue;
+        galleries.set(id, [...(galleries.get(id) ?? []), img]);
+      }
+      const slugs = new Map<string, string>();
+      for (const r of sheet("ProductSEOKeywords")) {
+        const id = String(r["product_id"] ?? "").trim();
+        const kw = String(r["keyword(ru-ru)"] ?? r["keyword(uk-ua)"] ?? "").trim();
+        if (id && kw && !slugs.has(id)) slugs.set(id, kw);
+      }
+      const specials = new Map<string, string>();
+      for (const r of sheet("Specials")) {
+        const id = String(r["product_id"] ?? "").trim();
+        const price = String(r["price"] ?? "").trim();
+        if (id && price && !specials.has(id)) specials.set(id, price);
+      }
+
+      const merged = json.map((r) => {
+        const id = String(r["product_id"] ?? "").trim();
+        const out: Record<string, unknown> = { ...r };
+        const g = galleries.get(id);
+        if (g?.length) out["gallery"] = g.join("\n");
+        const s = slugs.get(id);
+        if (s) out["seo_url"] = s;
+        const sp = specials.get(id);
+        if (sp) out["special_price"] = sp;
+        return out;
+      });
+
+      setRows(merged.slice(0, 5000));
       setFileName(file.name);
-      toast.success(`Прочитано строк: ${json.length}`);
+      toast.success(`Прочитано строк: ${merged.length}`);
     } catch (e) {
       toast.error((e as Error).message);
       setRows([]);
@@ -82,6 +139,7 @@ export function AdminImport() {
       setParsing(false);
     }
   }
+
 
   return (
     <div className="space-y-4">
@@ -124,7 +182,14 @@ export function AdminImport() {
             >
               Применить импорт
             </Button>
+            {preview.isPending ? (
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                {progress} / {rows.length}
+              </span>
+            ) : null}
           </div>
+
         </CardContent>
       </Card>
 

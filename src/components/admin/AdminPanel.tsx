@@ -8,8 +8,8 @@ import { AdminProducts, ProductForm, emptyProduct } from "./AdminProducts";
 import { AdminCategories } from "./AdminCategories";
 import { AdminImport } from "./AdminImport";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, ShieldAlert } from "lucide-react";
+import { Loader2 } from "lucide-react";
+
 
 const TABS = [
   { key: "orders", label: "📦 Заказы" },
@@ -35,23 +35,25 @@ export function AdminPanel() {
   }
 
   if (!access.data?.admin) {
+    // Non-admins must not learn that this page exists: plain 404.
     return (
-      <div className="flex min-h-[60vh] items-center justify-center px-4">
-        <Card className="max-w-md">
-          <CardContent className="space-y-3 p-8 text-center">
-            <ShieldAlert className="mx-auto size-8 text-destructive" />
-            <h1 className="text-lg font-semibold">Доступ запрещён</h1>
-            <p className="text-sm text-muted-foreground">
-              Эта страница доступна только администратору магазина.
-            </p>
-            <Button asChild variant="outline">
+      <div className="flex min-h-[70vh] items-center justify-center bg-background px-4">
+        <div className="max-w-md text-center">
+          <h1 className="text-7xl font-bold text-foreground">404</h1>
+          <h2 className="mt-4 text-xl font-semibold text-foreground">Страница не найдена</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Такой страницы не существует или она была перемещена.
+          </p>
+          <div className="mt-6">
+            <Button asChild>
               <Link to="/">На главную</Link>
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     );
   }
+
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8">

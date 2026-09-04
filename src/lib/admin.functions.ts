@@ -263,19 +263,27 @@ export const adminImportProducts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) => importSchema.parse(data))
   .handler(async ({ data, context }) => {
-    const { requireAdmin, normalizeRow, parseNumber, parseList, parseBool, slugify } =
-      await import("./admin.server");
+    const {
+      requireAdmin,
+      normalizeRow,
+      parseNumber,
+      parseList,
+      parseBool,
+      slugify,
+      normalizeImagePath,
+    } = await import("./admin.server");
     await requireAdmin(context);
 
     const { data: cats } = await context.supabase
       .from("categories")
-      .select("id, slug, name_ru, name_uk");
+      .select("id, slug, name_ru, name_uk, external_id");
     const catBy = new Map<string, string>();
     for (const c of cats ?? []) {
       catBy.set(c.slug.toLowerCase(), c.id);
       catBy.set(c.name_ru.toLowerCase(), c.id);
       catBy.set(c.name_uk.toLowerCase(), c.id);
       catBy.set(c.id, c.id);
+      if (c.external_id) catBy.set(String(c.external_id).toLowerCase(), c.id);
     }
 
     const { data: existing } = await context.supabase
@@ -290,6 +298,7 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       if (p.sku) bySku.set(String(p.sku).toLowerCase(), p.id);
       bySlug.set(p.slug.toLowerCase(), p.id);
     }
+
 
     type PlanRow = {
       line: number;
@@ -322,14 +331,23 @@ export const adminImportProducts = createServerFn({ method: "POST" })
         (raw["seo_url"] && bySlug.get(raw["seo_url"].toLowerCase())) ||
         null;
 
-      const catKey = (raw["category"] ?? "").toLowerCase();
-      const categoryId = catKey ? (catBy.get(catKey) ?? null) : null;
+      let categoryId: string | null = null;
+      for (const part of (raw["category"] ?? "").split(/[,;|]/)) {
+        const k = part.trim().toLowerCase();
+        if (!k) continue;
+        const hit = catBy.get(k);
+        if (hit) {
+          categoryId = hit;
+          break;
+        }
+      }
 
       if (!matchId && !categoryId) {
         skipped++;
         plan.push({ line, key, name, action: "skip", reason: "категория не найдена" });
         continue;
       }
+
 
       const patch: Record<string, unknown> = {};
       const put = (k: string, v: unknown) => {
@@ -340,17 +358,23 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       put("description_ru", raw["description_ru"]);
       put("description_uk", raw["description_uk"]);
       put("sku", raw["sku"]);
-      put("external_id", raw["external_id"]);
       put("price", parseNumber(raw["price"]));
       put("old_price", parseNumber(raw["old_price"]));
       put("special_price", parseNumber(raw["special_price"]));
+      put("manufacturer", raw["manufacturer"]);
+      put("brand", raw["brand"]);
       const qty = parseNumber(raw["quantity"]);
       if (qty !== null) {
         patch["quantity"] = Math.max(0, Math.round(qty));
         patch["in_stock"] = qty > 0;
       }
-      if (raw["image_path"]) patch["image_path"] = raw["image_path"];
-      if (raw["gallery"]) patch["gallery"] = parseList(raw["gallery"]);
+      const img = normalizeImagePath(raw["image_path"]);
+      if (img) patch["image_path"] = img;
+      const gallery = parseList(raw["gallery"])
+        .map((g) => normalizeImagePath(g))
+        .filter((g): g is string => Boolean(g));
+      if (gallery.length) patch["gallery"] = gallery;
+
       if (raw["specs_ru"]) patch["specs_ru"] = parseList(raw["specs_ru"]);
       if (raw["specs_uk"]) patch["specs_uk"] = parseList(raw["specs_uk"]);
       put("meta_title_ru", raw["meta_title_ru"]);
@@ -385,10 +409,12 @@ export const adminImportProducts = createServerFn({ method: "POST" })
             ...patch,
             slug: bySlug.has(slug.toLowerCase()) ? `${slug}_${line}` : slug,
             category_id: categoryId,
-            image_path: raw["image_path"] ?? "",
+            external_id: raw["external_id"] ?? null,
+            image_path: img ?? "",
             name_ru: patch["name_ru"] ?? name,
             name_uk: patch["name_uk"] ?? name,
           };
+
           const { error } = await context.supabase.from("products").insert(insert as never);
           if (error) {
             created--;
