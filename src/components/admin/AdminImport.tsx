@@ -25,6 +25,22 @@ type Plan = {
   rows: PlanRow[];
 };
 
+/** Result of reading an OpenCart export workbook. */
+type Parsed = {
+  fileName: string;
+  rows: Record<string, unknown>[];
+  products: number;
+  images: number;
+  imagesMatched: number;
+  attributes: number;
+  attributesMatched: number;
+  seo: number;
+  seoMatched: number;
+  specials: number;
+  supported: string[];
+  unsupported: { sheet: string; count: number }[];
+};
+
 const TONE: Record<PlanRow["action"], string> = {
   create: "bg-emerald-100 text-emerald-800",
   update: "bg-sky-100 text-sky-800",
@@ -40,15 +56,26 @@ const LABEL: Record<PlanRow["action"], string> = {
 };
 
 const CHUNK = 100;
+const UNSUPPORTED_SHEETS = [
+  "Discounts",
+  "Rewards",
+  "ProductOptions",
+  "ProductOptionValues",
+  "ProductFilters",
+];
+
+const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).trim());
+/** An OpenCart export pads the sheet with fully blank rows — those are not products. */
+const isBlank = (r: Record<string, unknown>) => Object.values(r).every((v) => str(v) === "");
 
 export function AdminImport() {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [fileName, setFileName] = useState("");
+  const [parsed, setParsed] = useState<Parsed | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState(0);
   const run = useServerFn(adminImportProducts);
   const qc = useQueryClient();
+  const rows = parsed?.rows ?? [];
 
   const preview = useMutation({
     // Large catalogs are sent in chunks: one 14 MB request would exceed request limits.
@@ -77,47 +104,78 @@ export function AdminImport() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-
   async function onFile(file: File) {
     setParsing(true);
     setPlan(null);
+    setParsed(null);
     try {
       const XLSX = await import("xlsx");
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
       const sheet = (name: string) => {
         const ws = wb.Sheets[name];
-        return ws ? XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" }) : [];
+        const json = ws ? XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" }) : [];
+        return json.filter((r) => !isBlank(r));
       };
 
+      // Step 1 — the Products sheet is the only source of products.
       const mainName = wb.SheetNames.includes("Products") ? "Products" : wb.SheetNames[0];
       if (!mainName) throw new Error("Пустой файл");
-      const json = sheet(mainName);
-      if (!json.length) throw new Error("В файле нет строк");
+      const products = sheet(mainName).filter((r) => str(r["name(ru-ru)"]) || str(r["name(uk-ua)"]) || str(r["name"]));
+      if (!products.length) throw new Error("На листе Products нет строк с товарами");
 
-      // OpenCart-style export: enrich product rows from the companion sheets.
+      // Step 2 — map OpenCart product_id → product row.
+      const ids = new Set(products.map((r) => str(r["product_id"])).filter(Boolean));
+
+      // Step 3+ — related sheets are attached to products, never imported as products.
       const galleries = new Map<string, string[]>();
-      for (const r of sheet("AdditionalImages")) {
-        const id = String(r["product_id"] ?? "").trim();
-        const img = String(r["image"] ?? "").trim();
+      const imageRows = sheet("AdditionalImages");
+      let imagesMatched = 0;
+      for (const r of imageRows) {
+        const id = str(r["product_id"]);
+        const img = str(r["image"]);
         if (!id || !img) continue;
+        if (!ids.has(id)) continue;
+        imagesMatched++;
         galleries.set(id, [...(galleries.get(id) ?? []), img]);
       }
+
       const slugs = new Map<string, string>();
-      for (const r of sheet("ProductSEOKeywords")) {
-        const id = String(r["product_id"] ?? "").trim();
-        const kw = String(r["keyword(ru-ru)"] ?? r["keyword(uk-ua)"] ?? "").trim();
-        if (id && kw && !slugs.has(id)) slugs.set(id, kw);
-      }
-      const specials = new Map<string, string>();
-      for (const r of sheet("Specials")) {
-        const id = String(r["product_id"] ?? "").trim();
-        const price = String(r["price"] ?? "").trim();
-        if (id && price && !specials.has(id)) specials.set(id, price);
+      const seoRows = sheet("ProductSEOKeywords");
+      let seoMatched = 0;
+      for (const r of seoRows) {
+        const id = str(r["product_id"]);
+        const kw = str(r["keyword(ru-ru)"]) || str(r["keyword(uk-ua)"]);
+        if (!id || !kw || !ids.has(id) || slugs.has(id)) continue;
+        slugs.set(id, kw);
+        seoMatched++;
       }
 
-      const merged = json.map((r) => {
-        const id = String(r["product_id"] ?? "").trim();
+      const specsRu = new Map<string, string[]>();
+      const specsUk = new Map<string, string[]>();
+      const attrRows = sheet("ProductAttributes");
+      let attributesMatched = 0;
+      for (const r of attrRows) {
+        const id = str(r["product_id"]);
+        if (!id || !ids.has(id)) continue;
+        const ru = str(r["text(ru-ru)"]);
+        const uk = str(r["text(uk-ua)"]) || ru;
+        if (!ru && !uk) continue;
+        attributesMatched++;
+        if (ru) specsRu.set(id, [...(specsRu.get(id) ?? []), ru]);
+        if (uk) specsUk.set(id, [...(specsUk.get(id) ?? []), uk]);
+      }
+
+      const specials = new Map<string, string>();
+      const specialRows = sheet("Specials");
+      for (const r of specialRows) {
+        const id = str(r["product_id"]);
+        const price = str(r["price"]);
+        if (id && price && ids.has(id) && !specials.has(id)) specials.set(id, price);
+      }
+
+      const merged = products.map((r) => {
+        const id = str(r["product_id"]);
         const out: Record<string, unknown> = { ...r };
         const g = galleries.get(id);
         if (g?.length) out["gallery"] = g.join("\n");
@@ -125,29 +183,48 @@ export function AdminImport() {
         if (s) out["seo_url"] = s;
         const sp = specials.get(id);
         if (sp) out["special_price"] = sp;
+        const ru = specsRu.get(id);
+        if (ru?.length) out["specs_ru"] = ru.join("\n");
+        const uk = specsUk.get(id);
+        if (uk?.length) out["specs_uk"] = uk.join("\n");
         return out;
       });
 
-      setRows(merged.slice(0, 5000));
-      setFileName(file.name);
-      toast.success(`Прочитано строк: ${merged.length}`);
+      const unsupported = UNSUPPORTED_SHEETS.map((name) => ({
+        sheet: name,
+        count: sheet(name).length,
+      })).filter((s) => s.count > 0);
+
+      setParsed({
+        fileName: file.name,
+        rows: merged,
+        products: merged.length,
+        images: imageRows.length,
+        imagesMatched,
+        attributes: attrRows.length,
+        attributesMatched,
+        seo: seoRows.length,
+        seoMatched,
+        specials: specialRows.length,
+        supported: ["Products", "AdditionalImages", "ProductAttributes", "ProductSEOKeywords", "Specials"],
+        unsupported,
+      });
+      toast.success(`Файл OpenCart распознан: товаров ${merged.length}`);
     } catch (e) {
       toast.error((e as Error).message);
-      setRows([]);
-      setFileName("");
+      setParsed(null);
     } finally {
       setParsing(false);
     }
   }
-
 
   return (
     <div className="space-y-4">
       <Card>
         <CardContent className="space-y-3 p-6">
           <p className="text-sm text-muted-foreground">
-            Загрузите .xlsx / .csv. Товары сопоставляются по external_id → sku → slug. Существующие
-            товары никогда не удаляются.
+            Загрузите выгрузку OpenCart (.xlsx / .csv). Товары берутся только с листа Products,
+            остальные листы привязываются по product_id. Существующие товары никогда не удаляются.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-input px-4 py-2 text-sm hover:bg-accent">
@@ -164,15 +241,12 @@ export function AdminImport() {
               />
             </label>
             {parsing ? <Loader2 className="size-4 animate-spin" /> : null}
-            {fileName ? (
+            {parsed ? (
               <span className="text-sm">
-                {fileName} · строк: <b>{rows.length}</b>
+                {parsed.fileName} · товаров: <b>{parsed.products}</b>
               </span>
             ) : null}
-            <Button
-              disabled={!rows.length || preview.isPending}
-              onClick={() => preview.mutate(false)}
-            >
+            <Button disabled={!rows.length || preview.isPending} onClick={() => preview.mutate(false)}>
               Предпросмотр
             </Button>
             <Button
@@ -189,9 +263,45 @@ export function AdminImport() {
               </span>
             ) : null}
           </div>
-
         </CardContent>
       </Card>
+
+      {parsed ? (
+        <Card>
+          <CardContent className="space-y-4 p-6">
+            <h3 className="font-semibold">Файл OpenCart успешно распознан</h3>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <Stat label="Товаров найдено" value={parsed.products} />
+              <Stat label="Доп. изображения" value={parsed.imagesMatched} />
+              <Stat label="Характеристики" value={parsed.attributesMatched} />
+              <Stat label="SEO URL" value={parsed.seoMatched} />
+              <Stat label="Акционные цены" value={parsed.specials} />
+            </div>
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              <div>
+                <div className="mb-1 font-medium">Обработанные листы</div>
+                <ul className="space-y-1 text-muted-foreground">
+                  {parsed.supported.map((s) => (
+                    <li key={s}>✓ {s}</li>
+                  ))}
+                </ul>
+              </div>
+              {parsed.unsupported.length ? (
+                <div>
+                  <div className="mb-1 font-medium">Пропущено (пока не поддерживается)</div>
+                  <ul className="space-y-1 text-muted-foreground">
+                    {parsed.unsupported.map((s) => (
+                      <li key={s.sheet}>
+                        ⚠ {s.sheet}: {s.count} строк — данные пропущены
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {plan ? (
         <Card>
