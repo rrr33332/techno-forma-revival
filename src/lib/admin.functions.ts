@@ -320,10 +320,20 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       const key = raw["external_id"] ?? raw["sku"] ?? raw["seo_url"] ?? name;
 
       if (!name) {
+        // A blank padding row from an OpenCart export is not an import error.
+        const empty = Object.values(data.rows[i] as Record<string, unknown>).every(
+          (v) => v === null || v === undefined || String(v).trim() === "",
+        );
+        if (empty) {
+          skipped++;
+          plan.push({ line, key, name, action: "skip", reason: "пустая строка" });
+          continue;
+        }
         errors++;
         plan.push({ line, key, name, action: "error", reason: "нет названия" });
         continue;
       }
+
 
       const matchId =
         (raw["external_id"] && byExternal.get(raw["external_id"].toLowerCase())) ||
