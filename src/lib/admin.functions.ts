@@ -182,9 +182,15 @@ export const adminListProducts = createServerFn({ method: "POST" })
 
     if (data.categoryId) query = query.eq("category_id", data.categoryId);
     if (data.q) {
-      const q = data.q.replace(/[%,]/g, " ");
-      query = query.or(`name_ru.ilike.%${q}%,name_uk.ilike.%${q}%,sku.ilike.%${q}%,slug.ilike.%${q}%`);
+      // Every word must match somewhere, so results are real hits, not guesses.
+      for (const term of data.q.split(/\s+/).filter(Boolean).slice(0, 5)) {
+        const p = `%${term.replace(/[%,()]/g, " ")}%`;
+        query = query.or(
+          `name_ru.ilike.${p},name_uk.ilike.${p},sku.ilike.${p},slug.ilike.${p},external_id.ilike.${p}`,
+        );
+      }
     }
+
 
     const { data: rows, error, count } = await query;
     if (error) throw new Error(error.message);
