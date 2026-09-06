@@ -455,12 +455,153 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       }
     }
 
+    const catName = new Map((cats ?? []).map((c) => [c.id, c.name_ru] as const));
+
     return {
       applied: data.apply,
       toCreate: created,
       toUpdate: updated,
       skipped,
       errors,
+      withCategory,
+      withoutCategory,
+      categories: [...usedCategories].map((id) => catName.get(id) ?? id),
+      unmatchedCategories: [...unmatched].map(([key, count]) => ({ key, count })),
       rows: plan.slice(0, 300),
     };
   });
+
+/* --------------------------- snapshots ----------------------------- */
+
+const KEEP_SNAPSHOTS = 5;
+
+/**
+ * Full copy of the catalog taken right before a bulk change, so the admin can
+ * roll products (and only products) back. Only the newest 5 are kept.
+ */
+export const adminCreateSnapshot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) =>
+    z
+      .object({ source: z.string().trim().max(80).default("Импорт OpenCart"), note: z.string().trim().max(200).optional() })
+      .parse(data ?? {}),
+  )
+  .handler(async ({ data, context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+
+    const { data: rows, error } = await context.supabase.from("products").select("*").limit(20000);
+    if (error) throw new Error(error.message);
+
+    const { data: snap, error: insErr } = await context.supabase
+      .from("product_snapshots")
+      .insert({
+        source: data.source,
+        note: data.note ?? null,
+        created_by: context.userId,
+        products_count: rows?.length ?? 0,
+        status: "pending",
+        data: (rows ?? []) as never,
+      })
+      .select("id")
+      .single();
+    if (insErr) throw new Error(insErr.message);
+
+    const { data: all } = await context.supabase
+      .from("product_snapshots")
+      .select("id")
+      .order("created_at", { ascending: false });
+    const stale = (all ?? []).slice(KEEP_SNAPSHOTS).map((s) => s.id);
+    if (stale.length) await context.supabase.from("product_snapshots").delete().in("id", stale);
+
+    return { id: snap.id };
+  });
+
+/** Records the outcome of the change the snapshot was taken for. */
+export const adminFinalizeSnapshot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        created: z.number().int().min(0),
+        updated: z.number().int().min(0),
+        cancel: z.boolean().optional(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+    if (data.cancel || (data.created === 0 && data.updated === 0)) {
+      await context.supabase.from("product_snapshots").delete().eq("id", data.id);
+      return { ok: true as const, kept: false };
+    }
+    const { error } = await context.supabase
+      .from("product_snapshots")
+      .update({ status: "done", products_created: data.created, products_updated: data.updated })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const, kept: true };
+  });
+
+export const adminListSnapshots = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+    const { data, error } = await context.supabase
+      .from("product_snapshots")
+      .select("id, source, note, status, products_count, products_created, products_updated, created_at")
+      .order("created_at", { ascending: false })
+      .limit(KEEP_SNAPSHOTS);
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  });
+
+/**
+ * Restores every product row from a snapshot. Products created after the
+ * snapshot are removed; orders, users and CRM data are never touched.
+ */
+export const adminRollbackSnapshot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+
+    const { data: snap, error } = await context.supabase
+      .from("product_snapshots")
+      .select("id, data")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!snap) throw new Error("Снимок не найден");
+
+    const rows = (snap.data as unknown as Record<string, unknown>[]) ?? [];
+    if (!rows.length) throw new Error("Снимок пуст");
+
+    const keep = new Set(rows.map((r) => String(r["id"])));
+    let restored = 0;
+    for (let i = 0; i < rows.length; i += 200) {
+      const chunk = rows.slice(i, i + 200);
+      const { error: upErr } = await context.supabase
+        .from("products")
+        .upsert(chunk as never, { onConflict: "id" });
+      if (upErr) throw new Error(upErr.message);
+      restored += chunk.length;
+    }
+
+    const { data: current } = await context.supabase.from("products").select("id").limit(20000);
+    const extra = (current ?? []).map((p) => p.id).filter((id) => !keep.has(id));
+    let removed = 0;
+    for (let i = 0; i < extra.length; i += 200) {
+      const chunk = extra.slice(i, i + 200);
+      const { error: delErr } = await context.supabase.from("products").delete().in("id", chunk);
+      if (delErr) throw new Error(delErr.message);
+      removed += chunk.length;
+    }
+
+    return { restored, removed };
+  });
+
