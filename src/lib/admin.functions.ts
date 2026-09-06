@@ -349,14 +349,24 @@ export const adminImportProducts = createServerFn({ method: "POST" })
         null;
 
       let categoryId: string | null = null;
-      for (const part of (raw["category"] ?? "").split(/[,;|]/)) {
-        const k = part.trim().toLowerCase();
-        if (!k) continue;
-        const hit = catBy.get(k);
+      const catKeys = (raw["category"] ?? "")
+        .split(/[,;|]/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      for (const part of catKeys) {
+        const hit = catBy.get(part.toLowerCase());
         if (hit) {
           categoryId = hit;
           break;
         }
+      }
+      if (categoryId) {
+        withCategory++;
+        usedCategories.add(categoryId);
+      } else {
+        withoutCategory++;
+        // Never invent a category from a raw OpenCart id — report it instead.
+        for (const k of catKeys) unmatched.set(k, (unmatched.get(k) ?? 0) + 1);
       }
 
       if (!matchId && !categoryId) {
@@ -364,6 +374,7 @@ export const adminImportProducts = createServerFn({ method: "POST" })
         plan.push({ line, key, name, action: "skip", reason: "категория не найдена" });
         continue;
       }
+
 
 
       const patch: Record<string, unknown> = {};
