@@ -2,7 +2,11 @@ import { useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { adminImportProducts } from "@/lib/admin.functions";
+import {
+  adminCreateSnapshot,
+  adminFinalizeSnapshot,
+  adminImportProducts,
+} from "@/lib/admin.functions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,8 +26,13 @@ type Plan = {
   toUpdate: number;
   skipped: number;
   errors: number;
+  withCategory: number;
+  withoutCategory: number;
+  categories: string[];
+  unmatchedCategories: { key: string; count: number }[];
   rows: PlanRow[];
 };
+
 
 /** Result of reading an OpenCart export workbook. */
 type Parsed = {

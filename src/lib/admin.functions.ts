@@ -182,9 +182,15 @@ export const adminListProducts = createServerFn({ method: "POST" })
 
     if (data.categoryId) query = query.eq("category_id", data.categoryId);
     if (data.q) {
-      const q = data.q.replace(/[%,]/g, " ");
-      query = query.or(`name_ru.ilike.%${q}%,name_uk.ilike.%${q}%,sku.ilike.%${q}%,slug.ilike.%${q}%`);
+      // Every word must match somewhere, so results are real hits, not guesses.
+      for (const term of data.q.split(/\s+/).filter(Boolean).slice(0, 5)) {
+        const p = `%${term.replace(/[%,()]/g, " ")}%`;
+        query = query.or(
+          `name_ru.ilike.${p},name_uk.ilike.${p},sku.ilike.${p},slug.ilike.${p},external_id.ilike.${p}`,
+        );
+      }
     }
+
 
     const { data: rows, error, count } = await query;
     if (error) throw new Error(error.message);
@@ -312,12 +318,19 @@ export const adminImportProducts = createServerFn({ method: "POST" })
     let updated = 0;
     let skipped = 0;
     let errors = 0;
+    let withCategory = 0;
+    let withoutCategory = 0;
+    /** OpenCart category keys we could not map onto a site category. */
+    const unmatched = new Map<string, number>();
+    /** Site categories that received products, by category id. */
+    const usedCategories = new Set<string>();
 
     for (let i = 0; i < data.rows.length; i++) {
       const raw = normalizeRow(data.rows[i] as Record<string, string>);
       const line = i + 2;
       const name = raw["name_ru"] ?? raw["name_uk"] ?? "";
       const key = raw["external_id"] ?? raw["sku"] ?? raw["seo_url"] ?? name;
+
 
       if (!name) {
         // A blank padding row from an OpenCart export is not an import error.
@@ -342,14 +355,24 @@ export const adminImportProducts = createServerFn({ method: "POST" })
         null;
 
       let categoryId: string | null = null;
-      for (const part of (raw["category"] ?? "").split(/[,;|]/)) {
-        const k = part.trim().toLowerCase();
-        if (!k) continue;
-        const hit = catBy.get(k);
+      const catKeys = (raw["category"] ?? "")
+        .split(/[,;|]/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      for (const part of catKeys) {
+        const hit = catBy.get(part.toLowerCase());
         if (hit) {
           categoryId = hit;
           break;
         }
+      }
+      if (categoryId) {
+        withCategory++;
+        usedCategories.add(categoryId);
+      } else {
+        withoutCategory++;
+        // Never invent a category from a raw OpenCart id — report it instead.
+        for (const k of catKeys) unmatched.set(k, (unmatched.get(k) ?? 0) + 1);
       }
 
       if (!matchId && !categoryId) {
@@ -357,6 +380,7 @@ export const adminImportProducts = createServerFn({ method: "POST" })
         plan.push({ line, key, name, action: "skip", reason: "категория не найдена" });
         continue;
       }
+
 
 
       const patch: Record<string, unknown> = {};
@@ -437,12 +461,153 @@ export const adminImportProducts = createServerFn({ method: "POST" })
       }
     }
 
+    const catName = new Map((cats ?? []).map((c) => [c.id, c.name_ru] as const));
+
     return {
       applied: data.apply,
       toCreate: created,
       toUpdate: updated,
       skipped,
       errors,
+      withCategory,
+      withoutCategory,
+      categories: [...usedCategories].map((id) => catName.get(id) ?? id),
+      unmatchedCategories: [...unmatched].map(([key, count]) => ({ key, count })),
       rows: plan.slice(0, 300),
     };
   });
+
+/* --------------------------- snapshots ----------------------------- */
+
+const KEEP_SNAPSHOTS = 5;
+
+/**
+ * Full copy of the catalog taken right before a bulk change, so the admin can
+ * roll products (and only products) back. Only the newest 5 are kept.
+ */
+export const adminCreateSnapshot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) =>
+    z
+      .object({ source: z.string().trim().max(80).default("Импорт OpenCart"), note: z.string().trim().max(200).optional() })
+      .parse(data ?? {}),
+  )
+  .handler(async ({ data, context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+
+    const { data: rows, error } = await context.supabase.from("products").select("*").limit(20000);
+    if (error) throw new Error(error.message);
+
+    const { data: snap, error: insErr } = await context.supabase
+      .from("product_snapshots")
+      .insert({
+        source: data.source,
+        note: data.note ?? null,
+        created_by: context.userId,
+        products_count: rows?.length ?? 0,
+        status: "pending",
+        data: (rows ?? []) as never,
+      })
+      .select("id")
+      .single();
+    if (insErr) throw new Error(insErr.message);
+
+    const { data: all } = await context.supabase
+      .from("product_snapshots")
+      .select("id")
+      .order("created_at", { ascending: false });
+    const stale = (all ?? []).slice(KEEP_SNAPSHOTS).map((s) => s.id);
+    if (stale.length) await context.supabase.from("product_snapshots").delete().in("id", stale);
+
+    return { id: snap.id };
+  });
+
+/** Records the outcome of the change the snapshot was taken for. */
+export const adminFinalizeSnapshot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        created: z.number().int().min(0),
+        updated: z.number().int().min(0),
+        cancel: z.boolean().optional(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+    if (data.cancel || (data.created === 0 && data.updated === 0)) {
+      await context.supabase.from("product_snapshots").delete().eq("id", data.id);
+      return { ok: true as const, kept: false };
+    }
+    const { error } = await context.supabase
+      .from("product_snapshots")
+      .update({ status: "done", products_created: data.created, products_updated: data.updated })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const, kept: true };
+  });
+
+export const adminListSnapshots = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+    const { data, error } = await context.supabase
+      .from("product_snapshots")
+      .select("id, source, note, status, products_count, products_created, products_updated, created_at")
+      .order("created_at", { ascending: false })
+      .limit(KEEP_SNAPSHOTS);
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  });
+
+/**
+ * Restores every product row from a snapshot. Products created after the
+ * snapshot are removed; orders, users and CRM data are never touched.
+ */
+export const adminRollbackSnapshot = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { requireAdmin } = await import("./admin.server");
+    await requireAdmin(context);
+
+    const { data: snap, error } = await context.supabase
+      .from("product_snapshots")
+      .select("id, data")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!snap) throw new Error("Снимок не найден");
+
+    const rows = (snap.data as unknown as Record<string, unknown>[]) ?? [];
+    if (!rows.length) throw new Error("Снимок пуст");
+
+    const keep = new Set(rows.map((r) => String(r["id"])));
+    let restored = 0;
+    for (let i = 0; i < rows.length; i += 200) {
+      const chunk = rows.slice(i, i + 200);
+      const { error: upErr } = await context.supabase
+        .from("products")
+        .upsert(chunk as never, { onConflict: "id" });
+      if (upErr) throw new Error(upErr.message);
+      restored += chunk.length;
+    }
+
+    const { data: current } = await context.supabase.from("products").select("id").limit(20000);
+    const extra = (current ?? []).map((p) => p.id).filter((id) => !keep.has(id));
+    let removed = 0;
+    for (let i = 0; i < extra.length; i += 200) {
+      const chunk = extra.slice(i, i + 200);
+      const { error: delErr } = await context.supabase.from("products").delete().in("id", chunk);
+      if (delErr) throw new Error(delErr.message);
+      removed += chunk.length;
+    }
+
+    return { restored, removed };
+  });
+
