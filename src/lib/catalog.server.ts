@@ -175,39 +175,56 @@ export async function loadHighlights(
   return { fresh, specials };
 }
 
-/** Full-text-ish search across name, article, slug and SEO url. */
+/** Real catalog search: every typed word must match a name, article or slug. */
 export async function loadSearch(query: string, lang: Lang): Promise<Product[]> {
   const q = query.trim();
   if (q.length < 2) return [];
 
   const supabase = publicClient();
   const { byId } = await categoryMap();
-  const safe = q.replace(/[%,()]/g, " ").trim();
-  const pattern = `%${safe}%`;
+  const terms = q
+    .replace(/[%,()]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2)
+    .slice(0, 5);
+  if (!terms.length) return [];
 
-  const { data, error } = await supabase
-    .from("products")
-    .select(PRODUCT_COLUMNS)
-    .eq("is_active", true)
-    .or(
+  let request = supabase.from("products").select(PRODUCT_COLUMNS).eq("is_active", true);
+  for (const term of terms) {
+    const pattern = `%${term}%`;
+    request = request.or(
       [
         `name_ru.ilike.${pattern}`,
         `name_uk.ilike.${pattern}`,
+        `sku.ilike.${pattern}`,
         `slug.ilike.${pattern}`,
         `seo_url.ilike.${pattern}`,
         `external_id.ilike.${pattern}`,
-        `description_ru.ilike.${pattern}`,
-        `description_uk.ilike.${pattern}`,
       ].join(","),
-    )
-    .order("sort_order", { ascending: true })
-    .limit(120);
+    );
+  }
+
+  const { data, error } = await request.order("sort_order", { ascending: true }).limit(120);
   if (error) throw new Error(error.message);
+
+  const needle = q.toLowerCase();
+  // Exact article matches and name hits rank above incidental matches.
+  const score = (row: Row) => {
+    const sku = String(row["sku"] ?? "").toLowerCase();
+    const name = `${row["name_ru"] ?? ""} ${row["name_uk"] ?? ""}`.toLowerCase();
+    if (sku && sku === needle) return 0;
+    if (sku.includes(needle)) return 1;
+    if (name.startsWith(needle)) return 2;
+    if (name.includes(needle)) return 3;
+    return 4;
+  };
 
   return (data ?? [])
     .filter((row) => byId.has((row as Row)["category_id"] as string))
+    .sort((a, b) => score(a as Row) - score(b as Row))
     .map((row) => toProduct(row as Row, lang, byId.get((row as Row)["category_id"] as string)!));
 }
+
 
 /** Single product page: the item itself plus siblings from the same category. */
 export async function loadProduct(
