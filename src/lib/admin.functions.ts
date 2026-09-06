@@ -312,12 +312,19 @@ export const adminImportProducts = createServerFn({ method: "POST" })
     let updated = 0;
     let skipped = 0;
     let errors = 0;
+    let withCategory = 0;
+    let withoutCategory = 0;
+    /** OpenCart category keys we could not map onto a site category. */
+    const unmatched = new Map<string, number>();
+    /** Site categories that received products, by category id. */
+    const usedCategories = new Set<string>();
 
     for (let i = 0; i < data.rows.length; i++) {
       const raw = normalizeRow(data.rows[i] as Record<string, string>);
       const line = i + 2;
       const name = raw["name_ru"] ?? raw["name_uk"] ?? "";
       const key = raw["external_id"] ?? raw["sku"] ?? raw["seo_url"] ?? name;
+
 
       if (!name) {
         // A blank padding row from an OpenCart export is not an import error.
