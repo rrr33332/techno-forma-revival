@@ -83,35 +83,80 @@ export function AdminImport() {
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState(0);
   const run = useServerFn(adminImportProducts);
+  const snapshot = useServerFn(adminCreateSnapshot);
+  const finalize = useServerFn(adminFinalizeSnapshot);
   const qc = useQueryClient();
   const rows = parsed?.rows ?? [];
 
   const preview = useMutation({
     // Large catalogs are sent in chunks: one 14 MB request would exceed request limits.
     mutationFn: async (apply: boolean) => {
-      const total: Plan = { applied: apply, toCreate: 0, toUpdate: 0, skipped: 0, errors: 0, rows: [] };
+      const total: Plan = {
+        applied: apply,
+        toCreate: 0,
+        toUpdate: 0,
+        skipped: 0,
+        errors: 0,
+        withCategory: 0,
+        withoutCategory: 0,
+        categories: [],
+        unmatchedCategories: [],
+        rows: [],
+      };
+      const cats = new Set<string>();
+      const unmatched = new Map<string, number>();
       setProgress(0);
-      for (let i = 0; i < rows.length; i += CHUNK) {
-        const slice = rows.slice(i, i + CHUNK);
-        const r = (await run({ data: { rows: slice, apply } })) as Plan;
-        total.toCreate += r.toCreate;
-        total.toUpdate += r.toUpdate;
-        total.skipped += r.skipped;
-        total.errors += r.errors;
-        total.rows.push(...r.rows.map((x) => ({ ...x, line: x.line + i })));
-        setProgress(Math.min(i + CHUNK, rows.length));
+
+      // A restore point is always taken before the catalog is touched.
+      const snapshotId = apply
+        ? (await snapshot({ data: { source: "Импорт OpenCart", note: parsed?.fileName } })).id
+        : null;
+
+      try {
+        for (let i = 0; i < rows.length; i += CHUNK) {
+          const slice = rows.slice(i, i + CHUNK);
+          const r = (await run({ data: { rows: slice, apply } })) as Plan;
+          total.toCreate += r.toCreate;
+          total.toUpdate += r.toUpdate;
+          total.skipped += r.skipped;
+          total.errors += r.errors;
+          total.withCategory += r.withCategory;
+          total.withoutCategory += r.withoutCategory;
+          for (const c of r.categories) cats.add(c);
+          for (const u of r.unmatchedCategories)
+            unmatched.set(u.key, (unmatched.get(u.key) ?? 0) + u.count);
+          total.rows.push(...r.rows.map((x) => ({ ...x, line: x.line + i })));
+          setProgress(Math.min(i + CHUNK, rows.length));
+        }
+      } catch (e) {
+        if (snapshotId)
+          await finalize({ data: { id: snapshotId, created: 0, updated: 0, cancel: true } });
+        throw e;
       }
+
+      total.categories = [...cats].sort();
+      total.unmatchedCategories = [...unmatched]
+        .map(([key, count]) => ({ key, count }))
+        .sort((a, b) => b.count - a.count);
+
+      if (snapshotId)
+        await finalize({
+          data: { id: snapshotId, created: total.toCreate, updated: total.toUpdate },
+        });
+
       return total;
     },
     onSuccess: (r) => {
       setPlan(r);
       if (r.applied) {
         toast.success(`Импорт применён: создано ${r.toCreate}, обновлено ${r.toUpdate}`);
-        qc.invalidateQueries({ queryKey: ["admin", "products"] });
+        qc.invalidateQueries({ queryKey: ["admin"] });
+        qc.invalidateQueries({ queryKey: ["catalog"] });
       }
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
 
   async function onFile(file: File) {
     setParsing(true);
