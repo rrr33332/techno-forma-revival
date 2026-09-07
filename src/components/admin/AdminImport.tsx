@@ -83,6 +83,8 @@ export function AdminImport() {
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState(0);
   const run = useServerFn(adminImportProducts);
+  const snapshot = useServerFn(adminCreateSnapshot);
+  const finalize = useServerFn(adminFinalizeSnapshot);
   const qc = useQueryClient();
   const rows = parsed?.rows ?? [];
 
